@@ -65,7 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     assumptions = subparsers.add_parser("assumptions", help="find hidden constraints")
     assumptions.add_argument("target")
-    assumptions.add_argument("--category", choices=("data",), default="data")
+    assumptions.add_argument(
+        "--category",
+        choices=("data", "environment"),
+        default=None,
+    )
     assumptions.add_argument("--min-confidence", type=_confidence, default=0.0)
     _add_shared_options(assumptions)
 

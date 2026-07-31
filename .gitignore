@@ -35,3 +35,6 @@ Thumbs.db
 
 .DS_Store
 Thumbs.db
+
+# Local test sandboxes
+/.test-tmp-*/

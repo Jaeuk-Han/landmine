@@ -15,6 +15,7 @@ class TestProtectionMatch:
     empty_input: bool
     mapping_keys: tuple[str, ...] | None = None
     expects_key_error: bool = False
+    removed_environment_variables: tuple[str, ...] = ()
 
 
 def _called_name(node: ast.AST) -> str | None:
@@ -72,18 +73,22 @@ class _TestVisitor(ast.NodeVisitor):
         self.scopes = scopes
         self.empty_names: set[str] = set()
         self.mapping_names: dict[str, tuple[str, ...]] = {}
+        self.removed_environment_variables: set[str] = set()
         self.expects_key_error = False
         self.matches: list[TestProtectionMatch] = []
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         previous = self.empty_names
         previous_mappings = self.mapping_names
+        previous_removed_environment = self.removed_environment_variables
         self.empty_names = set()
         self.mapping_names = {}
+        self.removed_environment_variables = set()
         for statement in node.body:
             self.visit(statement)
         self.empty_names = previous
         self.mapping_names = previous_mappings
+        self.removed_environment_variables = previous_removed_environment
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_function(node)
@@ -127,6 +132,24 @@ class _TestVisitor(ast.NodeVisitor):
         self.expects_key_error = previous
 
     def visit_Call(self, node: ast.Call) -> None:
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "monkeypatch"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            environment_variable = node.args[0].value
+            if node.func.attr == "delenv" and any(
+                keyword.arg == "raising"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is False
+                for keyword in node.keywords
+            ):
+                self.removed_environment_variables.add(environment_variable)
+            elif node.func.attr == "setenv":
+                self.removed_environment_variables.discard(environment_variable)
         scope = _called_name(node.func)
         if scope in self.scopes:
             mapping_keys = None
@@ -153,6 +176,7 @@ class _TestVisitor(ast.NodeVisitor):
                     empty_input=empty_input,
                     mapping_keys=mapping_keys,
                     expects_key_error=self.expects_key_error,
+                    removed_environment_variables=tuple(sorted(self.removed_environment_variables)),
                 )
             )
         self.generic_visit(node)
@@ -178,6 +202,7 @@ def analyze_python_test_source(
                 item.mapping_keys is None,
                 item.mapping_keys or (),
                 not item.expects_key_error,
+                item.removed_environment_variables,
             ),
         )
     )

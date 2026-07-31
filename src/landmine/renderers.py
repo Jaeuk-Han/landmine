@@ -130,6 +130,11 @@ def render_markdown(result: Result) -> str:
                     "- Protection meaning: protected = missing-key behavior is explicitly "
                     "tested; production exception handling is not implied."
                 )
+            elif detail.detector_id == "python.required-environment-variable":
+                lines.append(
+                    "- Protection meaning: protected = missing-variable behavior is "
+                    "explicitly tested; production exception handling is not implied."
+                )
         lines.append("")
     if result.evolution:
         lines.extend(["## Evolution timeline", ""])

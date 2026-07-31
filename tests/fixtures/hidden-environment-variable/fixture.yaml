@@ -1,0 +1,26 @@
+fixture_version: 1
+id: hidden-environment-variable
+query:
+  command: assumptions
+  target: src/config.py
+expected:
+  detector_ids:
+    - python.non-empty-collection
+    - python.required-mapping-key
+    - python.required-environment-variable
+  active:
+    - required_os_environ
+    - required_aliased_os
+    - required_imported_environ
+    - required_aliased_environ
+    - wrong_key_guard
+    - truthy_environment_guard
+  suppressed:
+    - membership_guarded
+    - early_return_guarded
+    - early_raise_guarded
+    - assert_guarded
+    - assigned_before_access
+forbidden_claims:
+  - "The current process environment was inspected"
+  - "A setenv-only test proves missing-variable behavior"

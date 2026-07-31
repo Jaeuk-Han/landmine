@@ -11,6 +11,9 @@ from pathlib import Path
 
 from landmine.assumptions import AnalysisContext, AssumptionCandidate, AssumptionDetector
 from landmine.detectors.python_non_empty_collection import PythonNonEmptyCollectionDetector
+from landmine.detectors.python_required_environment_variable import (
+    PythonRequiredEnvironmentVariableDetector,
+)
 from landmine.detectors.python_required_mapping_key import PythonRequiredMappingKeyDetector
 from landmine.domain import (
     AnalysisStatus,
@@ -44,7 +47,27 @@ MAX_SOURCE_BYTES = 1_000_000
 _DETECTORS: tuple[AssumptionDetector, ...] = (
     PythonNonEmptyCollectionDetector(),
     PythonRequiredMappingKeyDetector(),
+    PythonRequiredEnvironmentVariableDetector(),
 )
+
+
+def _selected_detectors(category: str | None) -> tuple[AssumptionDetector, ...]:
+    if category is None:
+        return _DETECTORS
+    try:
+        selected_category = AssumptionCategory(category)
+    except ValueError as exc:
+        supported = ", ".join(item.value for item in AssumptionCategory)
+        raise ValueError(
+            f"assumption category {category!r} is not implemented; use one of: {supported}"
+        ) from exc
+    return tuple(detector for detector in _DETECTORS if detector.category is selected_category)
+
+
+def _detector_categories(
+    detectors: Sequence[AssumptionDetector],
+) -> tuple[AssumptionCategory, ...]:
+    return tuple(dict.fromkeys(detector.category for detector in detectors))
 
 
 def _utc_now() -> datetime:
@@ -64,12 +87,16 @@ def _target_dict(target: Target) -> dict[str, object]:
     }
 
 
-def _no_evidence_finding(*, filtered: bool = False) -> Finding:
+def _no_evidence_finding(
+    *,
+    filtered: bool = False,
+    category_label: str = "data",
+) -> Finding:
     detail = (
         "The active detector found no supported signal at or above the minimum confidence; "
         "the absence of other assumptions was not established."
         if filtered
-        else "The active detectors found no supported data-assumption signal; "
+        else f"The active detectors found no supported {category_label}-assumption signal; "
         "the absence of other assumptions was not established."
     )
     return Finding(
@@ -157,6 +184,7 @@ def _discover_test_protection(
                     item.mapping_keys is None,
                     item.mapping_keys or (),
                     not item.expects_key_error,
+                    item.removed_environment_variables,
                 ),
             )
         ),
@@ -191,6 +219,8 @@ def _error_result(
     started: float,
     monotonic: Callable[[], float],
     exc: SymbolResolutionError,
+    category: str | None,
+    detectors: Sequence[AssumptionDetector],
 ) -> Result:
     material = f"assumptions\0{repository.head}\0symbol:{exc.symbol}\0{exc.code}\0" + ",".join(
         f"{candidate.match_kind}:{candidate.path}:{candidate.line}" for candidate in exc.candidates
@@ -211,7 +241,7 @@ def _error_result(
             "target": _target_dict(Target(symbol=exc.symbol)),
             "change": None,
             "goal": None,
-            "category": "data",
+            "category": category,
             "min_confidence": 0.0,
         },
         summary=str(exc),
@@ -232,8 +262,8 @@ def _error_result(
         ),
         error=ErrorDetail(code=exc.code, message=str(exc), candidates=exc.candidates),
         assumption_analysis=AssumptionAnalysis(
-            detectors_run=tuple(detector.detector_id for detector in _DETECTORS),
-            categories_scanned=(AssumptionCategory.DATA,),
+            detectors_run=tuple(detector.detector_id for detector in detectors),
+            categories_scanned=_detector_categories(detectors),
             suppression_count=0,
         ),
     )
@@ -243,18 +273,15 @@ def analyze_assumptions(
     *,
     repo: Path,
     target: Target,
-    category: str = "data",
+    category: str | None = None,
     min_confidence: float = 0.0,
     timeout: float = 15.0,
     max_files: int = 1000,
     clock: Clock = _utc_now,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> Result:
-    """Analyze one Python target with the registered bounded data detectors."""
-    if category != AssumptionCategory.DATA.value:
-        raise ValueError(
-            f"assumption category {category!r} is not implemented; use --category data"
-        )
+    """Analyze one Python target with the selected registered detectors."""
+    detectors = _selected_detectors(category)
     started = monotonic()
     repository, runner = preflight(repo, timeout=timeout)
     root = runner.cwd
@@ -279,6 +306,8 @@ def analyze_assumptions(
             started=started,
             monotonic=monotonic,
             exc=exc,
+            category=category,
+            detectors=detectors,
         )
     assert resolved.path is not None
     assert resolved.start_line is not None
@@ -337,7 +366,7 @@ def analyze_assumptions(
             start_line=resolved.start_line,
             end_line=resolved.end_line,
         )
-        for detector in _DETECTORS:
+        for detector in detectors:
             raw_candidates.extend(detector.detect(context))
     limited_candidates = [item for item in raw_candidates if item.limitation_reason is not None]
     if limited_candidates:
@@ -407,6 +436,11 @@ def analyze_assumptions(
                     else {}
                 ),
                 **({"expects_key_error": True} if match.expects_key_error else {}),
+                **(
+                    {"removed_environment_variables": list(match.removed_environment_variables)}
+                    if match.removed_environment_variables
+                    else {}
+                ),
             },
             excerpt=match.matching_text,
             observed_at=observed_at,
@@ -452,7 +486,8 @@ def analyze_assumptions(
         evidence_by_id[source_item.id] = source_item
         related = matches_by_scope.get(candidate.scope or "", [])
         candidate_tests = tuple(sorted({item.path for item in related}))
-        mapping_protection = candidate.required_key is not None
+        environment_protection = candidate.detector_id == "python.required-environment-variable"
+        mapping_protection = candidate.detector_id == "python.required-mapping-key"
         explicit_missing_key = any(
             item.mapping_keys is not None and candidate.required_key not in item.mapping_keys
             for item in related
@@ -463,15 +498,34 @@ def analyze_assumptions(
             and item.expects_key_error
             for item in related
         )
-        explicit_edge_case = (
-            explicit_missing_key
-            if mapping_protection
-            else any(item.empty_input for item in related)
+        explicit_missing_environment = any(
+            candidate.required_key in item.removed_environment_variables for item in related
         )
+        environment_key_error_characterization = any(
+            candidate.required_key in item.removed_environment_variables and item.expects_key_error
+            for item in related
+        )
+        if environment_protection:
+            explicit_edge_case = explicit_missing_environment
+        elif mapping_protection:
+            explicit_edge_case = explicit_missing_key
+        else:
+            explicit_edge_case = any(item.empty_input for item in related)
         if explicit_edge_case:
             protection = ProtectionStatus.PROTECTED
             protected_count += 1
-            if mapping_protection:
+            if environment_protection:
+                uncertainty = (
+                    "A missing-variable behavior is explicitly tested with "
+                    "monkeypatch.delenv(..., raising=False); "
+                    + (
+                        "a KeyError characterization is present. "
+                        if environment_key_error_characterization
+                        else ""
+                    )
+                    + "Protection does not imply that production code handles the exception."
+                )
+            elif mapping_protection:
                 uncertainty = (
                     "A missing-key behavior is explicitly tested with a mapping literal; "
                     + (
@@ -489,11 +543,23 @@ def analyze_assumptions(
         elif related or test_truncated or test_parse_failure or candidate.scope is None:
             protection = ProtectionStatus.UNKNOWN
             unknown_count += 1
-            uncertainty = (
-                "Candidate tests were found, but no explicit empty-input call was proven."
-                if related
-                else "Test protection could not be determined within the available evidence."
-            )
+            if related and environment_protection:
+                uncertainty = (
+                    "Candidate tests were found, but no explicit missing-variable setup "
+                    "with monkeypatch.delenv(..., raising=False) was proven."
+                )
+            elif related and mapping_protection:
+                uncertainty = (
+                    "Candidate tests were found, but no explicit missing-key mapping was proven."
+                )
+            elif related:
+                uncertainty = (
+                    "Candidate tests were found, but no explicit empty-input call was proven."
+                )
+            else:
+                uncertainty = (
+                    "Test protection could not be determined within the available evidence."
+                )
         else:
             protection = ProtectionStatus.UNPROTECTED
             uncertainty = "No candidate test reference was found in the bounded test search."
@@ -507,11 +573,12 @@ def analyze_assumptions(
             f"{candidate.column}\0{candidate.observed_signal}\0{candidate.variable}\0"
             f"{candidate.required_key or ''}"
         )
-        title = (
-            "Unchecked required mapping key"
-            if candidate.required_key is not None
-            else "Unchecked collection cardinality"
-        )
+        if environment_protection:
+            title = "Unchecked required environment variable"
+        elif mapping_protection:
+            title = "Unchecked required mapping key"
+        else:
+            title = "Unchecked collection cardinality"
         findings.append(
             Finding(
                 id=f"finding_{hashlib.sha256(finding_material.encode()).hexdigest()[:12]}",
@@ -522,7 +589,7 @@ def analyze_assumptions(
                 confidence=min(candidate.confidence, candidate.confidence_ceiling),
                 evidence_ids=tuple(sorted({source_item.id, *test_ids})),
                 impact=Impact.BEHAVIORAL,
-                tags=("assumption", "data", candidate.detector_id),
+                tags=("assumption", candidate.category.value, candidate.detector_id),
                 assumption=AssumptionDetail(
                     detector_id=candidate.detector_id,
                     category=candidate.category,
@@ -556,7 +623,12 @@ def analyze_assumptions(
         )
     )
     if not findings:
-        findings.append(_no_evidence_finding(filtered=filtered_count > 0))
+        findings.append(
+            _no_evidence_finding(
+                filtered=filtered_count > 0,
+                category_label=category or "registered",
+            )
+        )
 
     evidence = tuple(
         sorted(
@@ -587,9 +659,15 @@ def analyze_assumptions(
                 "with python.required-mapping-key; "
                 f"suppressed {len(suppressed)} guarded or statically safe candidate(s)."
             )
+        elif active_detector_ids == {"python.required-environment-variable"}:
+            summary = (
+                f"Found {len(actual_findings)} supported required environment-variable "
+                "signal(s) with python.required-environment-variable; "
+                f"suppressed {len(suppressed)} guarded or statically safe candidate(s)."
+            )
         else:
             summary = (
-                f"Found {len(actual_findings)} supported data-assumption signal(s) "
+                f"Found {len(actual_findings)} supported assumption signal(s) "
                 f"across {len(active_detector_ids)} detector(s); "
                 f"suppressed {len(suppressed)} guarded or statically safe candidate(s)."
             )
@@ -600,7 +678,8 @@ def analyze_assumptions(
         )
     else:
         summary = (
-            "The active detectors found no supported data-assumption signal; "
+            f"The active detectors found no supported {category or 'registered'}-assumption "
+            "signal; "
             f"{len(suppressed)} candidate(s) were suppressed. "
             "The absence of other assumptions was not established."
         )
@@ -612,7 +691,8 @@ def analyze_assumptions(
     )
     material = (
         f"assumptions\0{repository.head}\0{resolved.path}\0{resolved.start_line}\0"
-        f"{resolved.end_line}\0data\0{min_confidence:g}\0" + ",".join(item.id for item in evidence)
+        f"{resolved.end_line}\0{category or 'all'}\0{min_confidence:g}\0"
+        + ",".join(item.id for item in evidence)
     )
     return Result(
         schema_version="landmine.result.v1",
@@ -640,8 +720,8 @@ def analyze_assumptions(
             evidence_count=len(evidence),
         ),
         assumption_analysis=AssumptionAnalysis(
-            detectors_run=tuple(detector.detector_id for detector in _DETECTORS),
-            categories_scanned=(AssumptionCategory.DATA,),
+            detectors_run=tuple(detector.detector_id for detector in detectors),
+            categories_scanned=_detector_categories(detectors),
             suppression_count=len(suppressed),
         ),
     )

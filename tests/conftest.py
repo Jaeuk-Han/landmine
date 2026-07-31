@@ -344,6 +344,121 @@ def hidden_mapping_key(git_fixture: GitFixture) -> GitFixture:
     return git_fixture
 
 
+@pytest.fixture
+def hidden_environment_variable(git_fixture: GitFixture) -> GitFixture:
+    git_fixture.commit(
+        "initial",
+        "Add environment configuration behavior",
+        {
+            "src/config.py": (
+                "import os\n"
+                "import os as operating_system\n"
+                "from os import environ\n"
+                "from os import environ as env\n"
+                "\n"
+                "\n"
+                "def required_os_environ():\n"
+                '    return os.environ["DATABASE_URL"]\n'
+                "\n"
+                "\n"
+                "def required_aliased_os():\n"
+                '    return operating_system.environ["API_TOKEN"]\n'
+                "\n"
+                "\n"
+                "def required_imported_environ():\n"
+                '    return environ["SECRET_KEY"]\n'
+                "\n"
+                "\n"
+                "def required_aliased_environ():\n"
+                '    return env["REGION"]\n'
+                "\n"
+                "\n"
+                "def membership_guarded():\n"
+                '    if "DATABASE_URL" in os.environ:\n'
+                '        return os.environ["DATABASE_URL"]\n'
+                "    return None\n"
+                "\n"
+                "\n"
+                "def early_return_guarded():\n"
+                '    if "DATABASE_URL" not in os.environ:\n'
+                "        return None\n"
+                '    return os.environ["DATABASE_URL"]\n'
+                "\n"
+                "\n"
+                "def early_raise_guarded():\n"
+                '    if "DATABASE_URL" not in os.environ:\n'
+                '        raise RuntimeError("required")\n'
+                '    return os.environ["DATABASE_URL"]\n'
+                "\n"
+                "\n"
+                "def assert_guarded():\n"
+                '    assert "DATABASE_URL" in os.environ\n'
+                '    return os.environ["DATABASE_URL"]\n'
+                "\n"
+                "\n"
+                "def assigned_before_access():\n"
+                '    os.environ["DATABASE_URL"] = "sqlite://"\n'
+                '    return os.environ["DATABASE_URL"]\n'
+                "\n"
+                "\n"
+                "def get_with_no_default():\n"
+                '    return os.environ.get("DATABASE_URL")\n'
+                "\n"
+                "\n"
+                "def getenv_with_default():\n"
+                '    return os.getenv("DATABASE_URL", "sqlite://")\n'
+                "\n"
+                "\n"
+                "def dynamic_key(key):\n"
+                "    return os.environ[key]\n"
+                "\n"
+                "\n"
+                "def custom_environ_mapping(custom_mapping):\n"
+                "    environ = custom_mapping\n"
+                '    return environ["CUSTOM_KEY"]\n'
+                "\n"
+                "\n"
+                "def wrong_key_guard():\n"
+                '    if "OTHER_KEY" in os.environ:\n'
+                '        return os.environ["DATABASE_URL"]\n'
+                "    return None\n"
+                "\n"
+                "\n"
+                "def truthy_environment_guard():\n"
+                "    if os.environ:\n"
+                '        return os.environ["DATABASE_URL"]\n'
+                "    return None\n"
+            ),
+            "tests/test_config.py": (
+                "import pytest\n"
+                "\n"
+                "from config import (\n"
+                "    required_aliased_os,\n"
+                "    required_imported_environ,\n"
+                "    required_os_environ,\n"
+                ")\n"
+                "\n"
+                "\n"
+                "def test_required_os_environ_when_set(monkeypatch):\n"
+                '    monkeypatch.setenv("DATABASE_URL", "sqlite://")\n'
+                "    assert required_os_environ()\n"
+                "\n"
+                "\n"
+                "def test_required_aliased_os_when_missing(monkeypatch):\n"
+                '    monkeypatch.delenv("API_TOKEN", raising=False)\n'
+                "    required_aliased_os()\n"
+                "\n"
+                "\n"
+                "def test_required_imported_environ_characterizes_key_error(monkeypatch):\n"
+                '    monkeypatch.delenv("SECRET_KEY", raising=False)\n'
+                "    with pytest.raises(KeyError):\n"
+                "        required_imported_environ()\n"
+            ),
+        },
+    )
+    return git_fixture
+
+
 def repository_digest(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(item for item in root.rglob("*") if item.is_file()):

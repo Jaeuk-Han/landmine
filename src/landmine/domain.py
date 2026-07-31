@@ -28,6 +28,7 @@ class Impact(StrEnum):
 
 class AssumptionCategory(StrEnum):
     DATA = "data"
+    ENVIRONMENT = "environment"
 
 
 class ProtectionStatus(StrEnum):
