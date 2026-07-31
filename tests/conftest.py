@@ -1022,6 +1022,71 @@ def hidden_time(git_fixture: GitFixture) -> GitFixture:
     return git_fixture
 
 
+@pytest.fixture
+def direct_blast(git_fixture: GitFixture) -> GitFixture:
+    git_fixture.commit(
+        "initial",
+        "Add direct blast fixture",
+        {
+            "src/landmine_fixture/__init__.py": "",
+            "src/landmine_fixture/fallback.py": (
+                'DEFAULT_REASON = "unavailable"\n'
+                "\n"
+                "\n"
+                "class HospitalFallback:\n"
+                "    def route(self) -> str:\n"
+                '        return "fallback"\n'
+            ),
+            "src/landmine_fixture/router.py": (
+                "from landmine_fixture.fallback import HospitalFallback as Fallback\n"
+                "\n"
+                "\n"
+                "def build_route():\n"
+                "    return Fallback()\n"
+            ),
+            "src/landmine_fixture/api.py": (
+                "import landmine_fixture.fallback as fallback_module\n"
+                "\n"
+                "\n"
+                "def create_fallback():\n"
+                "    return fallback_module.HospitalFallback()\n"
+            ),
+            "src/landmine_fixture/unrelated.py": (
+                "def local_function(local_value):\n"
+                "    HospitalFallback = local_value\n"
+                "    return HospitalFallback\n"
+            ),
+            "src/landmine_fixture/dynamic.py": (
+                "import importlib\n"
+                "\n"
+                "\n"
+                "def dynamic_fallback():\n"
+                '    module = importlib.import_module("landmine_fixture.fallback")\n'
+                '    return getattr(module, "HospitalFallback")\n'
+            ),
+            "src/landmine_fixture/wildcard.py": ("from landmine_fixture.fallback import *\n"),
+            "src/landmine_fixture/second_hop.py": (
+                "from landmine_fixture.router import build_route\n"
+                "\n"
+                "\n"
+                "def indirect():\n"
+                "    return build_route()\n"
+            ),
+            "tests/test_router.py": (
+                "from landmine_fixture.fallback import HospitalFallback\n"
+                "\n"
+                "\n"
+                "def test_fallback_route():\n"
+                '    assert HospitalFallback().route() == "fallback"\n'
+            ),
+            "tests/test_candidate.py": (
+                "def test_hospital_fallback_candidate_name_only():\n    assert True\n"
+            ),
+        },
+    )
+    return git_fixture
+
+
 def repository_digest(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(item for item in root.rglob("*") if item.is_file()):

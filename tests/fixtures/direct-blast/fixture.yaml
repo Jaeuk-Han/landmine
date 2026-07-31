@@ -1,0 +1,31 @@
+fixture_version: 1
+id: direct-blast
+query:
+  command: blast
+  change: change HospitalFallback behavior
+  target: symbol:HospitalFallback
+expected:
+  subject:
+    path: src/landmine_fixture/fallback.py
+    symbol: HospitalFallback
+  direct_paths:
+    - src/landmine_fixture/fallback.py
+    - src/landmine_fixture/router.py
+    - src/landmine_fixture/api.py
+    - tests/test_router.py
+  excluded_paths:
+    - src/landmine_fixture/unrelated.py
+    - src/landmine_fixture/dynamic.py
+    - src/landmine_fixture/second_hop.py
+    - tests/test_candidate.py
+  limitations:
+    - dynamic_import
+    - wildcard_import
+  not_evaluated:
+    - git_cochange
+    - second_hop
+    - behavioral_impact
+    - operational_impact
+forbidden_claims:
+  - tests/test_candidate.py directly covers HospitalFallback
+  - second-hop consumers were analyzed

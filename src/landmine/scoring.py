@@ -104,3 +104,69 @@ def score_assumptions(
     else:
         grade = "low"
     return Risk(score=total, grade=grade, components=components)
+
+
+def score_blast(
+    *,
+    dependent_file_count: int,
+    reference_site_count: int,
+    direct_test_count: int,
+    candidate_test_count: int,
+    publicly_exported: bool,
+    importing_package_count: int,
+    uncertainty_signals: tuple[str, ...],
+) -> Risk:
+    """Score only deterministic direct-impact signals for the Phase 3 slice."""
+    additional_references = max(0, reference_site_count - dependent_file_count)
+    coupling = (
+        min(48, dependent_file_count * 8)
+        + min(20, additional_references * 5)
+        + (10 if publicly_exported else 0)
+        + (10 if importing_package_count > 1 else 0)
+    )
+    test_gap = 10 if direct_test_count else 55 if candidate_test_count else 80
+    uncertainty = min(
+        100, sum(20 if item == "unresolved_import" else 15 for item in uncertainty_signals)
+    )
+    values = {
+        "coupling": min(100, coupling),
+        "history": 0,
+        "test_gap": test_gap,
+        "contract_surface": 0,
+        "operational": 0,
+        "uncertainty": uncertainty,
+    }
+    signals = {
+        "coupling": (
+            *((f"direct_dependent_files:{dependent_file_count}",) if dependent_file_count else ()),
+            *((f"reference_sites:{reference_site_count}",) if reference_site_count else ()),
+            *(("public_export",) if publicly_exported else ()),
+            *(("multiple_importing_packages",) if importing_package_count > 1 else ()),
+        ),
+        "history": ("not_evaluated",),
+        "test_gap": (
+            ("direct_tests_found",)
+            if direct_test_count
+            else ("candidate_tests_only",)
+            if candidate_test_count
+            else ("no_related_tests",)
+        ),
+        "contract_surface": ("not_evaluated",),
+        "operational": ("not_evaluated",),
+        "uncertainty": tuple(sorted(set(uncertainty_signals))),
+    }
+    components = {
+        name: ScoreComponent(values[name], weight, signals[name])
+        for name, weight in _WEIGHTS.items()
+    }
+    total = round(sum(component.value * component.weight for component in components.values()))
+    grade = (
+        "critical"
+        if total >= 75
+        else "high"
+        if total >= 50
+        else "moderate"
+        if total >= 25
+        else "low"
+    )
+    return Risk(score=total, grade=grade, components=components)

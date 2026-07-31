@@ -9,6 +9,7 @@ from pathlib import Path
 
 from landmine import __version__
 from landmine.analyzers.assumptions import analyze_assumptions
+from landmine.analyzers.blast import analyze_blast
 from landmine.analyzers.why import analyze_why
 from landmine.git import GitError, GitTimeout
 from landmine.renderers import render_json, render_markdown
@@ -83,6 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     blast = subparsers.add_parser("blast", help="trace change impact (Phase 3)")
     blast.add_argument("change")
     blast.add_argument("--target")
+    blast.add_argument("--depth", type=_positive_int, default=1)
     _add_shared_options(blast)
 
     defuse = subparsers.add_parser("defuse", help="build a safe change plan (Phase 4)")
@@ -95,11 +97,21 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command not in {"why", "assumptions"}:
+    if args.command == "defuse":
         parser.error(f"{args.command} is visible in the CLI but is not implemented")
     try:
-        target = parse_target(args.target)
-        if args.command == "why":
+        target = parse_target(args.target) if args.target is not None else None
+        if args.command == "blast":
+            result = analyze_blast(
+                repo=args.repo,
+                change=args.change,
+                target=target,
+                depth=args.depth,
+                timeout=args.timeout,
+                max_files=args.max_files,
+            )
+        elif args.command == "why":
+            assert target is not None
             result = analyze_why(
                 repo=args.repo,
                 target=target,
@@ -108,6 +120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 max_files=args.max_files,
             )
         else:
+            assert target is not None
             result = analyze_assumptions(
                 repo=args.repo,
                 target=target,

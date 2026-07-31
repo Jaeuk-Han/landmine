@@ -36,6 +36,10 @@ def result_dict(result: Result) -> dict[str, Any]:
         del value["evolution"]
     if value.get("assumption_analysis") is None:
         del value["assumption_analysis"]
+    if value.get("blast_analysis") is None:
+        del value["blast_analysis"]
+    if result.command != "blast":
+        del value["impacts"]
     for finding in value.get("findings", []):
         if finding.get("assumption") is None:
             del finding["assumption"]
@@ -98,6 +102,8 @@ def render_markdown(result: Result) -> str:
             lines.append("- No candidates found.")
         lines.append("")
         return "\n".join(lines)
+    if result.command == "blast":
+        return _render_blast_markdown(result)
     lines = [
         f"# Landmine: {result.command}",
         "",
@@ -276,6 +282,96 @@ def render_markdown(result: Result) -> str:
             f"- HEAD: `{result.repository.head}`",
             f"- Dirty worktree: {str(result.repository.dirty).lower()}",
             f"- Shallow repository: {str(result.repository.shallow).lower()}",
+            f"- Evidence count: {result.metrics.evidence_count}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_blast_markdown(result: Result) -> str:
+    analysis = result.blast_analysis
+    if analysis is None:
+        raise ValueError("successful blast result requires blast_analysis")
+    subject = analysis.subject
+    target_label = f"{subject.path}:{subject.start_line}-{subject.end_line}" + (
+        f" (`{subject.symbol}`)" if subject.symbol else ""
+    )
+    lines = [
+        "# Landmine: blast",
+        "",
+        "## Summary",
+        "",
+        result.summary,
+        "",
+        "## Risk",
+        "",
+        f"- Score: {result.risk.score}/100 ({result.risk.grade})",
+    ]
+    for name, component in result.risk.components.items():
+        signals = ", ".join(component.signals) or "none"
+        lines.append(f"- {name}: {component.value} (signals: {signals})")
+    lines.extend(["", "## Target", "", f"- {target_label}", "", "## Direct impacts", ""])
+    non_tests = [item for item in result.impacts if item.impact_type != "test"]
+    if non_tests:
+        for impact in non_tests:
+            evidence = ", ".join(impact.evidence_ids)
+            path = " → ".join(impact.path_from_target)
+            lines.extend(
+                [
+                    f"### {impact.impact_type}: {impact.path}:{impact.start_line}",
+                    "",
+                    f"- Status: {impact.status.value} ({impact.confidence:.2f})",
+                    f"- Reason: {impact.reason}",
+                    f"- Path: {path}",
+                    f"- Evidence: {evidence}",
+                    "",
+                ]
+            )
+    else:
+        lines.extend(["- No proven direct impacts were found.", ""])
+    lines.extend(["## Related tests", ""])
+    direct_tests = [item for item in result.impacts if item.impact_type == "test"]
+    if direct_tests:
+        for impact in direct_tests:
+            lines.append(
+                f"- Direct test: {impact.path}:{impact.start_line} "
+                f"(evidence: {', '.join(impact.evidence_ids)})"
+            )
+        lines.append(
+            "- A direct test import/reference does not by itself establish behavioral coverage."
+        )
+    else:
+        lines.append("- No direct test import/reference was found.")
+    for path in analysis.candidate_tests:
+        lines.append(f"- Candidate test: {path} (naming/text signal only; not a direct impact).")
+    lines.extend(["", "## Unknown surfaces", ""])
+    for surface in analysis.not_evaluated:
+        lines.append(f"- `{surface}`: not evaluated")
+    lines.extend(["", "## Evidence", ""])
+    for item in result.evidence:
+        locator = ", ".join(f"{key}={value}" for key, value in sorted(item.locator.items()))
+        lines.append(f"- `{item.id}` [{item.kind}] {locator}")
+        if item.excerpt:
+            lines.append(f"  - Excerpt (untrusted data): {item.excerpt!r}")
+    lines.extend(["", "## Limitations", ""])
+    if result.limitations:
+        for limitation in result.limitations:
+            lines.append(f"- `{limitation.code}`: {limitation.message}")
+    else:
+        lines.append("- None recorded.")
+    lines.extend(
+        [
+            "",
+            "## Analysis metadata",
+            "",
+            f"- Status: {result.analysis_status.value}",
+            f"- Scope: {analysis.scope}",
+            f"- Supported depth: {analysis.supported_depth}",
+            f"- HEAD: `{result.repository.head}`",
+            f"- Dirty worktree: {str(result.repository.dirty).lower()}",
+            f"- Shallow repository: {str(result.repository.shallow).lower()}",
+            f"- Files scanned: {result.metrics.files_scanned}",
             f"- Evidence count: {result.metrics.evidence_count}",
             "",
         ]

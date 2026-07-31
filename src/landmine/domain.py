@@ -41,6 +41,11 @@ class ProtectionStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
+class BlastImpactStatus(StrEnum):
+    DIRECT = "direct"
+    INFERRED = "inferred"
+
+
 @dataclass(frozen=True)
 class Target:
     path: str | None = None
@@ -108,6 +113,42 @@ class AssumptionAnalysis:
     detectors_run: tuple[str, ...]
     categories_scanned: tuple[AssumptionCategory, ...]
     suppression_count: int
+
+
+@dataclass(frozen=True)
+class BlastSubject:
+    path: str
+    start_line: int
+    end_line: int
+    symbol: str | None = None
+
+
+@dataclass(frozen=True)
+class BlastImpact:
+    id: str
+    impact_type: str
+    path: str
+    start_line: int
+    end_line: int
+    symbol: str | None
+    status: BlastImpactStatus
+    confidence: float
+    evidence_ids: tuple[str, ...]
+    path_from_target: tuple[str, ...]
+    reason: str
+    limitations: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BlastAnalysis:
+    scope: str
+    supported_depth: int
+    subject: BlastSubject
+    impact_count: int
+    direct_test_count: int
+    candidate_test_count: int
+    candidate_tests: tuple[str, ...]
+    not_evaluated: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -201,3 +242,5 @@ class Result:
     error: ErrorDetail | None = None
     evolution: tuple[EvolutionCommit, ...] = ()
     assumption_analysis: AssumptionAnalysis | None = None
+    blast_analysis: BlastAnalysis | None = None
+    impacts: tuple[BlastImpact, ...] = ()
