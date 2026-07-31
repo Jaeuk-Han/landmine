@@ -289,7 +289,11 @@
         "suggested_alternatives": {
           "type": "array",
           "items": {"type": "string"}
-        }
+        },
+        "path_literal": {"type": "string"},
+        "access_operation": {"type": "string"},
+        "api_binding": {"type": "string"},
+        "path_anchor": {"type": "string"}
       }
     },
     "assumptionAnalysis": {

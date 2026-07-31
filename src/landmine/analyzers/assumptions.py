@@ -13,6 +13,9 @@ from landmine.assumptions import AnalysisContext, AssumptionCandidate, Assumptio
 from landmine.detectors.python_arbitrary_set_selection import (
     PythonArbitrarySetSelectionDetector,
 )
+from landmine.detectors.python_cwd_relative_file_access import (
+    PythonCwdRelativeFileAccessDetector,
+)
 from landmine.detectors.python_non_empty_collection import PythonNonEmptyCollectionDetector
 from landmine.detectors.python_required_environment_variable import (
     PythonRequiredEnvironmentVariableDetector,
@@ -56,6 +59,7 @@ _DETECTORS: tuple[AssumptionDetector, ...] = (
     PythonRequiredEnvironmentVariableDetector(),
     PythonRequiredResponseFieldDetector(),
     PythonArbitrarySetSelectionDetector(),
+    PythonCwdRelativeFileAccessDetector(),
 )
 
 
@@ -194,6 +198,7 @@ def _discover_test_protection(
                     not item.expects_key_error,
                     item.removed_environment_variables,
                     tuple((mock.library, mock.method, mock.fields) for mock in item.response_mocks),
+                    not item.changed_working_directory,
                 ),
             )
         ),
@@ -444,6 +449,7 @@ def analyze_assumptions(
                     if match.mapping_keys is not None
                     else {}
                 ),
+                **({"changed_working_directory": True} if match.changed_working_directory else {}),
                 **({"expects_key_error": True} if match.expects_key_error else {}),
                 **(
                     {"removed_environment_variables": list(match.removed_environment_variables)}
@@ -521,6 +527,17 @@ def analyze_assumptions(
                     if candidate.selection_operation is not None
                     else {}
                 ),
+                **(
+                    {
+                        "path_literal": candidate.path_literal,
+                        "access_operation": candidate.access_operation,
+                        "api_binding": candidate.api_binding,
+                    }
+                    if candidate.path_literal is not None
+                    and candidate.access_operation is not None
+                    and candidate.api_binding is not None
+                    else {}
+                ),
             },
             excerpt=line_excerpt,
             observed_at=observed_at,
@@ -555,6 +572,11 @@ def analyze_assumptions(
                         if candidate.selection_operation is not None
                         else {}
                     ),
+                    **(
+                        {"path_expression": observation.expression}
+                        if candidate.path_literal is not None
+                        else {}
+                    ),
                 },
                 excerpt=provenance_excerpt,
                 observed_at=observed_at,
@@ -568,6 +590,7 @@ def analyze_assumptions(
         mapping_protection = candidate.detector_id == "python.required-mapping-key"
         response_protection = candidate.detector_id == "python.required-response-field"
         ordering_protection = candidate.detector_id == "python.arbitrary-set-selection"
+        filesystem_protection = candidate.detector_id == "python.cwd-relative-file-access"
         explicit_missing_key = any(
             item.mapping_keys is not None and candidate.required_key not in item.mapping_keys
             for item in related
@@ -604,8 +627,11 @@ def analyze_assumptions(
             )
             for item in related
         )
+        cwd_characterized = any(item.changed_working_directory for item in related)
         if ordering_protection:
             explicit_edge_case = False
+        elif filesystem_protection:
+            explicit_edge_case = cwd_characterized
         elif response_protection:
             explicit_edge_case = explicit_missing_response_field
         elif environment_protection:
@@ -630,7 +656,18 @@ def analyze_assumptions(
         elif explicit_edge_case:
             protection = ProtectionStatus.PROTECTED
             protected_count += 1
-            if response_protection:
+            if filesystem_protection:
+                uncertainty = (
+                    (
+                        candidate.uncertainty_note + " "
+                        if candidate.uncertainty_note is not None
+                        else ""
+                    )
+                    + "The working-directory-dependent behavior is explicitly "
+                    "characterized with monkeypatch.chdir(...); protection does not "
+                    "establish safety from every working directory."
+                )
+            elif response_protection:
                 uncertainty = (
                     "The missing-field external response behavior is explicitly "
                     "characterized with a proven HTTP mock; "
@@ -670,7 +707,17 @@ def analyze_assumptions(
         elif related or test_truncated or test_parse_failure or candidate.scope is None:
             protection = ProtectionStatus.UNKNOWN
             unknown_count += 1
-            if related and response_protection:
+            if related and filesystem_protection:
+                uncertainty = (
+                    (
+                        candidate.uncertainty_note + " "
+                        if candidate.uncertainty_note is not None
+                        else ""
+                    )
+                    + "Candidate tests were found, but no direct monkeypatch.chdir(...) "
+                    "setup was proven."
+                )
+            elif related and response_protection:
                 uncertainty = (
                     "Candidate tests were found, but no proven HTTP mock omitted "
                     "the required response field."
@@ -694,7 +741,11 @@ def analyze_assumptions(
                 )
         else:
             protection = ProtectionStatus.UNPROTECTED
-            uncertainty = "No candidate test reference was found in the bounded test search."
+            uncertainty = (
+                candidate.uncertainty_note + " "
+                if filesystem_protection and candidate.uncertainty_note is not None
+                else ""
+            ) + "No candidate test reference was found in the bounded test search."
         test_ids = [
             item.id
             for item in evidence_by_id.values()
@@ -704,8 +755,11 @@ def analyze_assumptions(
             f"{candidate.detector_id}\0{candidate.path}\0{candidate.line}\0"
             f"{candidate.column}\0{candidate.observed_signal}\0{candidate.variable}\0"
             f"{candidate.required_key or ''}\0{candidate.selection_operation or ''}"
+            f"\0{candidate.path_literal or ''}\0{candidate.access_operation or ''}"
         )
-        if ordering_protection:
+        if filesystem_protection:
+            title = "CWD-relative file access"
+        elif ordering_protection:
             title = "Arbitrary set element selection"
         elif response_protection:
             title = "Unchecked required response field"
@@ -742,6 +796,7 @@ def analyze_assumptions(
                         candidate.variable
                         if candidate.required_key is not None
                         or candidate.selection_operation is not None
+                        or candidate.path_literal is not None
                         else None
                     ),
                     required_key=candidate.required_key,
@@ -749,6 +804,10 @@ def analyze_assumptions(
                     http_method=candidate.http_method,
                     selection_operation=candidate.selection_operation,
                     suggested_alternatives=candidate.suggested_alternatives,
+                    path_literal=candidate.path_literal,
+                    access_operation=candidate.access_operation,
+                    api_binding=candidate.api_binding,
+                    path_anchor=candidate.path_anchor,
                 ),
             )
         )
@@ -815,6 +874,12 @@ def analyze_assumptions(
                 f"Found {len(actual_findings)} supported arbitrary set-selection "
                 "signal(s) with python.arbitrary-set-selection; "
                 f"suppressed {len(suppressed)} statically deterministic candidate(s)."
+            )
+        elif active_detector_ids == {"python.cwd-relative-file-access"}:
+            summary = (
+                f"Found {len(actual_findings)} supported CWD-relative file-access "
+                "signal(s) with python.cwd-relative-file-access; "
+                f"suppressed {len(suppressed)} explicitly anchored candidate(s)."
             )
         else:
             summary = (

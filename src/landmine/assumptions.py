@@ -50,6 +50,10 @@ class AssumptionCandidate:
     selection_operation: str | None = None
     suggested_alternatives: tuple[str, ...] = ()
     uncertainty_note: str | None = None
+    path_literal: str | None = None
+    access_operation: str | None = None
+    api_binding: str | None = None
+    path_anchor: str | None = None
 
 
 class AssumptionDetector(Protocol):

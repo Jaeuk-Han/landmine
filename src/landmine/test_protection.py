@@ -24,6 +24,7 @@ class TestProtectionMatch:
     expects_key_error: bool = False
     removed_environment_variables: tuple[str, ...] = ()
     response_mocks: tuple[ResponseMock, ...] = ()
+    changed_working_directory: bool = False
 
 
 def _called_name(node: ast.AST) -> str | None:
@@ -122,6 +123,8 @@ class _TestVisitor(ast.NodeVisitor):
         self.proven_http_mocks: dict[str, tuple[str, str]] = {}
         self.response_mock_fields: dict[str, tuple[str, ...]] = {}
         self.expects_key_error = False
+        self.changed_working_directory = False
+        self.monkeypatch_available = False
         self.matches: list[TestProtectionMatch] = []
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
@@ -130,11 +133,22 @@ class _TestVisitor(ast.NodeVisitor):
         previous_removed_environment = self.removed_environment_variables
         previous_http_mocks = self.proven_http_mocks
         previous_response_fields = self.response_mock_fields
+        previous_changed_working_directory = self.changed_working_directory
+        previous_monkeypatch_available = self.monkeypatch_available
         self.empty_names = set()
         self.mapping_names = {}
         self.removed_environment_variables = set()
         self.proven_http_mocks = {}
         self.response_mock_fields = {}
+        self.changed_working_directory = False
+        self.monkeypatch_available = any(
+            argument.arg == "monkeypatch"
+            for argument in (
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            )
+        )
         for statement in node.body:
             self.visit(statement)
         self.empty_names = previous
@@ -142,6 +156,8 @@ class _TestVisitor(ast.NodeVisitor):
         self.removed_environment_variables = previous_removed_environment
         self.proven_http_mocks = previous_http_mocks
         self.response_mock_fields = previous_response_fields
+        self.changed_working_directory = previous_changed_working_directory
+        self.monkeypatch_available = previous_monkeypatch_available
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_function(node)
@@ -198,6 +214,15 @@ class _TestVisitor(ast.NodeVisitor):
         self.expects_key_error = previous
 
     def visit_Call(self, node: ast.Call) -> None:
+        if (
+            self.monkeypatch_available
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "monkeypatch"
+            and node.func.attr == "chdir"
+            and bool(node.args)
+        ):
+            self.changed_working_directory = True
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -261,6 +286,7 @@ class _TestVisitor(ast.NodeVisitor):
                             ),
                         )
                     ),
+                    changed_working_directory=self.changed_working_directory,
                 )
             )
         self.generic_visit(node)
@@ -288,6 +314,7 @@ def analyze_python_test_source(
                 not item.expects_key_error,
                 item.removed_environment_variables,
                 tuple((mock.library, mock.method, mock.fields) for mock in item.response_mocks),
+                not item.changed_working_directory,
             ),
         )
     )

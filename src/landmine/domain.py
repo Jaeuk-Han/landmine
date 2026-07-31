@@ -31,6 +31,7 @@ class AssumptionCategory(StrEnum):
     ENVIRONMENT = "environment"
     EXTERNAL_CONTRACT = "external_contract"
     ORDERING = "ordering"
+    FILESYSTEM = "filesystem"
 
 
 class ProtectionStatus(StrEnum):
@@ -92,6 +93,10 @@ class AssumptionDetail:
     http_method: str | None = None
     selection_operation: str | None = None
     suggested_alternatives: tuple[str, ...] = ()
+    path_literal: str | None = None
+    access_operation: str | None = None
+    api_binding: str | None = None
+    path_anchor: str | None = None
 
 
 @dataclass(frozen=True)

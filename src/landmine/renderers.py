@@ -53,6 +53,14 @@ def result_dict(result: Result) -> dict[str, Any]:
                 del assumption["selection_operation"]
             if not assumption.get("suggested_alternatives"):
                 del assumption["suggested_alternatives"]
+            if assumption.get("path_literal") is None:
+                del assumption["path_literal"]
+            if assumption.get("access_operation") is None:
+                del assumption["access_operation"]
+            if assumption.get("api_binding") is None:
+                del assumption["api_binding"]
+            if assumption.get("path_anchor") is None:
+                del assumption["path_anchor"]
     return value
 
 
@@ -138,6 +146,17 @@ def render_markdown(result: Result) -> str:
                         if detail.selection_operation is not None
                         else []
                     ),
+                    *(
+                        [
+                            f"- Relative path: `{detail.path_literal}`",
+                            f"- Access operation: `{detail.access_operation}`",
+                            f"- API binding: `{detail.api_binding}`",
+                        ]
+                        if detail.path_literal is not None
+                        and detail.access_operation is not None
+                        and detail.api_binding is not None
+                        else []
+                    ),
                     f"- Violation: {detail.violation_scenario}",
                     f"- Consequence: {detail.consequence}",
                     f"- Confidence ceiling: {detail.confidence_ceiling:.2f}",
@@ -146,7 +165,11 @@ def render_markdown(result: Result) -> str:
                     f"- Uncertainty: {detail.uncertainty or 'none recorded'}",
                     *(
                         [
-                            "- Suggested deterministic alternatives: "
+                            (
+                                "- Suggested explicit anchors: "
+                                if detail.detector_id == "python.cwd-relative-file-access"
+                                else "- Suggested deterministic alternatives: "
+                            )
                             + ", ".join(
                                 f"`{alternative}`" for alternative in detail.suggested_alternatives
                             ),
@@ -175,6 +198,12 @@ def render_markdown(result: Result) -> str:
                     "- Protection meaning: protected = missing-field external response "
                     "behavior is explicitly characterized; production schema-drift "
                     "handling is not implied."
+                )
+            elif detail.detector_id == "python.cwd-relative-file-access":
+                lines.append(
+                    "- Protection meaning: protected = working-directory-dependent "
+                    "behavior is explicitly characterized; safety from arbitrary working "
+                    "directories is not implied."
                 )
         lines.append("")
     if result.evolution:

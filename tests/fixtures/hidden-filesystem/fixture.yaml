@@ -1,0 +1,41 @@
+fixture_version: 1
+id: hidden-filesystem
+query:
+  command: assumptions
+  target: src/config_loader.py
+expected:
+  detector_ids:
+    - python.non-empty-collection
+    - python.required-mapping-key
+    - python.required-environment-variable
+    - python.required-response-field
+    - python.arbitrary-set-selection
+    - python.cwd-relative-file-access
+  active:
+    - builtin_open_relative
+    - pathlib_direct_read
+    - pathlib_module_alias
+    - pathlib_import_alias
+    - assigned_relative_path
+    - joined_literal_segments
+    - exists_guarded_relative
+    - file_not_found_handled_relative
+    - tilde_relative_path
+  ignored:
+    - builtin_open_absolute_posix
+    - builtin_open_absolute_windows
+    - builtin_open_unc
+    - rebound_builtin_open
+    - dynamic_segment
+    - function_parameter_path
+    - custom_path_class
+    - file_relative_anchor
+    - resolved_file_relative_anchor
+    - explicit_cwd_anchor
+    - home_anchor
+    - package_resource_anchor
+    - dirname_file_anchor
+    - path_constructed_without_access
+forbidden_claims:
+  - "The file does not exist"
+  - "The current working directory is always the repository root"

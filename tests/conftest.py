@@ -735,6 +735,150 @@ def hidden_ordering(git_fixture: GitFixture) -> GitFixture:
     return git_fixture
 
 
+@pytest.fixture
+def hidden_filesystem(git_fixture: GitFixture) -> GitFixture:
+    git_fixture.commit(
+        "initial",
+        "Add configuration file loading behavior",
+        {
+            "src/config_loader.py": (
+                "import importlib.resources\n"
+                "import os\n"
+                "import pathlib as pl\n"
+                "from pathlib import Path\n"
+                "from pathlib import Path as FilePath\n"
+                "\n"
+                "\n"
+                "def builtin_open_relative():\n"
+                '    return open("config/settings.json").read()\n'
+                "\n"
+                "\n"
+                "def builtin_open_absolute_posix():\n"
+                '    return open("/etc/app/config.json").read()\n'
+                "\n"
+                "\n"
+                "def builtin_open_absolute_windows():\n"
+                '    return open("C:\\\\app\\\\config.json").read()\n'
+                "\n"
+                "\n"
+                "def builtin_open_unc():\n"
+                '    return open(r"\\\\server\\share\\config.json").read()\n'
+                "\n"
+                "\n"
+                "def rebound_builtin_open():\n"
+                "    open = custom_loader\n"
+                '    return open("config.json")\n'
+                "\n"
+                "\n"
+                "def pathlib_direct_read():\n"
+                '    return Path("config.yaml").read_text()\n'
+                "\n"
+                "\n"
+                "def pathlib_module_alias():\n"
+                '    return pl.Path("payload.bin").read_bytes()\n'
+                "\n"
+                "\n"
+                "def pathlib_import_alias(data):\n"
+                '    return FilePath("output.txt").write_text(data)\n'
+                "\n"
+                "\n"
+                "def assigned_relative_path():\n"
+                '    config_path = Path("config.json")\n'
+                "    return config_path.read_text()\n"
+                "\n"
+                "\n"
+                "def joined_literal_segments():\n"
+                '    base = Path("config")\n'
+                '    settings = base / "settings.json"\n'
+                "    return settings.read_text()\n"
+                "\n"
+                "\n"
+                "def dynamic_segment(name):\n"
+                '    path = Path("config") / name\n'
+                "    return path.read_text()\n"
+                "\n"
+                "\n"
+                "def function_parameter_path(path):\n"
+                "    return path.read_text()\n"
+                "\n"
+                "\n"
+                "class CustomPath:\n"
+                "    def __init__(self, value):\n"
+                "        self.value = value\n"
+                "\n"
+                "    def read_text(self):\n"
+                "        return self.value\n"
+                "\n"
+                "\n"
+                "def custom_path_class():\n"
+                '    return CustomPath("config.json").read_text()\n'
+                "\n"
+                "\n"
+                "def file_relative_anchor():\n"
+                '    return (Path(__file__).parent / "config.json").read_text()\n'
+                "\n"
+                "\n"
+                "def resolved_file_relative_anchor():\n"
+                '    return (Path(__file__).resolve().parent / "config.json").read_text()\n'
+                "\n"
+                "\n"
+                "def explicit_cwd_anchor():\n"
+                '    return (Path.cwd() / "config.json").read_text()\n'
+                "\n"
+                "\n"
+                "def home_anchor():\n"
+                '    return (Path.home() / ".config" / "app.json").read_text()\n'
+                "\n"
+                "\n"
+                "def package_resource_anchor():\n"
+                '    return (importlib.resources.files("package") / "config.json").read_text()\n'
+                "\n"
+                "\n"
+                "def dirname_file_anchor():\n"
+                '    return open(os.path.join(os.path.dirname(__file__), "config.json")).read()\n'
+                "\n"
+                "\n"
+                "def exists_guarded_relative():\n"
+                '    path = Path("config.json")\n'
+                "    if path.exists():\n"
+                "        return path.read_text()\n"
+                "    return None\n"
+                "\n"
+                "\n"
+                "def file_not_found_handled_relative():\n"
+                "    try:\n"
+                '        return open("config.json").read()\n'
+                "    except FileNotFoundError:\n"
+                "        return None\n"
+                "\n"
+                "\n"
+                "def tilde_relative_path():\n"
+                '    return Path("~/config.json").read_text()\n'
+                "\n"
+                "\n"
+                "def path_constructed_without_access():\n"
+                '    return Path("config.json")\n'
+            ),
+            "tests/test_config_loader.py": (
+                "from config_loader import (\n"
+                "    builtin_open_relative,\n"
+                "    pathlib_direct_read,\n"
+                ")\n"
+                "\n"
+                "\n"
+                "def test_builtin_open_relative(monkeypatch, tmp_path):\n"
+                "    monkeypatch.chdir(tmp_path)\n"
+                "    builtin_open_relative()\n"
+                "\n"
+                "\n"
+                "def test_pathlib_direct_read():\n"
+                "    pathlib_direct_read()\n"
+            ),
+        },
+    )
+    return git_fixture
+
+
 def repository_digest(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(item for item in root.rglob("*") if item.is_file()):

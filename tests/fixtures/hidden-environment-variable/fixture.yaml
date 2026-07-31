@@ -10,6 +10,7 @@ expected:
     - python.required-environment-variable
     - python.required-response-field
     - python.arbitrary-set-selection
+    - python.cwd-relative-file-access
   active:
     - required_os_environ
     - required_aliased_os

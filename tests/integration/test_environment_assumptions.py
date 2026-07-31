@@ -122,6 +122,7 @@ def test_default_category_runs_all_detectors(
         DETECTOR_ID,
         "python.required-response-field",
         "python.arbitrary-set-selection",
+        "python.cwd-relative-file-access",
     )
 
 

@@ -122,6 +122,7 @@ def test_default_category_runs_all_five_detectors(
         "python.required-environment-variable",
         DETECTOR_ID,
         "python.arbitrary-set-selection",
+        "python.cwd-relative-file-access",
     )
 
 
