@@ -280,7 +280,9 @@
         "protection": {"enum": ["protected", "unprotected", "unknown"]},
         "candidate_tests": {"type": "array", "items": {"type": "string"}},
         "uncertainty": {"type": ["string", "null"]},
-        "scope": {"type": ["string", "null"]}
+        "scope": {"type": ["string", "null"]},
+        "base_expression": {"type": "string"},
+        "required_key": {"type": "string"}
       }
     },
     "assumptionAnalysis": {

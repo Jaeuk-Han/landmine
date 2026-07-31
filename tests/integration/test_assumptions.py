@@ -158,7 +158,10 @@ def test_no_finding_output_is_calibrated(git_fixture: GitFixture) -> None:
     assert "found no supported" in result.summary.lower()
     assert "no assumptions exist" not in render_markdown(result).lower()
     assert result.assumption_analysis is not None
-    assert result.assumption_analysis.detectors_run == ("python.non-empty-collection",)
+    assert result.assumption_analysis.detectors_run == (
+        "python.non-empty-collection",
+        "python.required-mapping-key",
+    )
 
 
 def test_min_confidence_filters_findings(hidden_cardinality: GitFixture) -> None:
@@ -169,6 +172,19 @@ def test_min_confidence_filters_findings(hidden_cardinality: GitFixture) -> None
 
 def test_assumption_json_is_deterministic(hidden_cardinality: GitFixture) -> None:
     assert render_json(analyze(hidden_cardinality)) == render_json(analyze(hidden_cardinality))
+
+
+def test_non_empty_collection_json_omits_mapping_only_fields(
+    hidden_cardinality: GitFixture,
+) -> None:
+    payload = result_dict(analyze(hidden_cardinality))
+    details = [
+        item["assumption"]
+        for item in payload["findings"]
+        if item.get("assumption", {}).get("detector_id") == "python.non-empty-collection"
+    ]
+    assert details
+    assert all("base_expression" not in item and "required_key" not in item for item in details)
 
 
 def test_assumption_markdown_references_evidence(hidden_cardinality: GitFixture) -> None:

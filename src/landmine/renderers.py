@@ -39,6 +39,12 @@ def result_dict(result: Result) -> dict[str, Any]:
     for finding in value.get("findings", []):
         if finding.get("assumption") is None:
             del finding["assumption"]
+        else:
+            assumption = finding["assumption"]
+            if assumption.get("base_expression") is None:
+                del assumption["base_expression"]
+            if assumption.get("required_key") is None:
+                del assumption["required_key"]
     return value
 
 
@@ -103,6 +109,14 @@ def render_markdown(result: Result) -> str:
                     f"- Detector: `{detail.detector_id}`",
                     f"- Category: {detail.category.value}",
                     f"- Signal: {detail.observed_signal}",
+                    *(
+                        [
+                            f"- Base expression: `{detail.base_expression}`",
+                            f"- Required key: {detail.required_key!r}",
+                        ]
+                        if detail.required_key is not None
+                        else []
+                    ),
                     f"- Violation: {detail.violation_scenario}",
                     f"- Consequence: {detail.consequence}",
                     f"- Confidence ceiling: {detail.confidence_ceiling:.2f}",
@@ -111,6 +125,11 @@ def render_markdown(result: Result) -> str:
                     f"- Uncertainty: {detail.uncertainty or 'none recorded'}",
                 ]
             )
+            if detail.detector_id == "python.required-mapping-key":
+                lines.append(
+                    "- Protection meaning: protected = missing-key behavior is explicitly "
+                    "tested; production exception handling is not implied."
+                )
         lines.append("")
     if result.evolution:
         lines.extend(["## Evolution timeline", ""])

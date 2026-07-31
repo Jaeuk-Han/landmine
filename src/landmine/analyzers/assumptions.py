@@ -9,8 +9,9 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from landmine.assumptions import AnalysisContext, AssumptionCandidate
+from landmine.assumptions import AnalysisContext, AssumptionCandidate, AssumptionDetector
 from landmine.detectors.python_non_empty_collection import PythonNonEmptyCollectionDetector
+from landmine.detectors.python_required_mapping_key import PythonRequiredMappingKeyDetector
 from landmine.domain import (
     AnalysisStatus,
     AssumptionAnalysis,
@@ -40,7 +41,10 @@ from landmine.test_protection import TestProtectionMatch, analyze_python_test_so
 
 Clock = Callable[[], datetime]
 MAX_SOURCE_BYTES = 1_000_000
-_DETECTOR = PythonNonEmptyCollectionDetector()
+_DETECTORS: tuple[AssumptionDetector, ...] = (
+    PythonNonEmptyCollectionDetector(),
+    PythonRequiredMappingKeyDetector(),
+)
 
 
 def _utc_now() -> datetime:
@@ -65,7 +69,7 @@ def _no_evidence_finding(*, filtered: bool = False) -> Finding:
         "The active detector found no supported signal at or above the minimum confidence; "
         "the absence of other assumptions was not established."
         if filtered
-        else "The active detector found no supported non-empty collection signal; "
+        else "The active detectors found no supported data-assumption signal; "
         "the absence of other assumptions was not established."
     )
     return Finding(
@@ -141,17 +145,19 @@ def _discover_test_protection(
             matches.extend(analyze_python_test_source(path, source, scopes))
         except SyntaxError:
             parse_failure = True
-    combined: dict[tuple[str, str], TestProtectionMatch] = {}
-    for match in matches:
-        key = (match.path, match.scope)
-        existing = combined.get(key)
-        if existing is None or (match.empty_input and not existing.empty_input):
-            combined[key] = match
     return (
         tuple(
             sorted(
-                combined.values(),
-                key=lambda item: (item.path, item.scope, item.line, not item.empty_input),
+                set(matches),
+                key=lambda item: (
+                    item.path,
+                    item.scope,
+                    item.line,
+                    not item.empty_input,
+                    item.mapping_keys is None,
+                    item.mapping_keys or (),
+                    not item.expects_key_error,
+                ),
             )
         ),
         scanned,
@@ -226,7 +232,7 @@ def _error_result(
         ),
         error=ErrorDetail(code=exc.code, message=str(exc), candidates=exc.candidates),
         assumption_analysis=AssumptionAnalysis(
-            detectors_run=(_DETECTOR.detector_id,),
+            detectors_run=tuple(detector.detector_id for detector in _DETECTORS),
             categories_scanned=(AssumptionCategory.DATA,),
             suppression_count=0,
         ),
@@ -244,7 +250,7 @@ def analyze_assumptions(
     clock: Clock = _utc_now,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> Result:
-    """Analyze one Python target with the bounded data-cardinality detector."""
+    """Analyze one Python target with the registered bounded data detectors."""
     if category != AssumptionCategory.DATA.value:
         raise ValueError(
             f"assumption category {category!r} is not implemented; use --category data"
@@ -325,16 +331,37 @@ def analyze_assumptions(
     assert resolved.end_line is not None
     raw_candidates: list[AssumptionCandidate] = []
     if source is not None and tree is not None:
-        raw_candidates = _DETECTOR.detect(
-            AnalysisContext(
-                path=resolved.path,
-                source=source,
-                start_line=resolved.start_line,
-                end_line=resolved.end_line,
+        context = AnalysisContext(
+            path=resolved.path,
+            source=source,
+            start_line=resolved.start_line,
+            end_line=resolved.end_line,
+        )
+        for detector in _DETECTORS:
+            raw_candidates.extend(detector.detect(context))
+    limited_candidates = [item for item in raw_candidates if item.limitation_reason is not None]
+    if limited_candidates:
+        affected = tuple(sorted({f"{item.path}:{item.line}" for item in limited_candidates}))
+        limitations.append(
+            Limitation(
+                code="provider_failure",
+                message=(
+                    "At least one required mapping-key base expression could not be "
+                    "normalized; no finding was produced for that access."
+                ),
+                affected=affected,
             )
         )
-    suppressed = [item for item in raw_candidates if item.suppression_reason is not None]
-    active = [item for item in raw_candidates if item.suppression_reason is None]
+    suppressed = [
+        item
+        for item in raw_candidates
+        if item.suppression_reason is not None and item.limitation_reason is None
+    ]
+    active = [
+        item
+        for item in raw_candidates
+        if item.suppression_reason is None and item.limitation_reason is None
+    ]
     scopes = {item.scope for item in active if item.scope is not None}
     test_matches, test_files_scanned, test_truncated, test_parse_failure = (
         _discover_test_protection(
@@ -374,6 +401,12 @@ def analyze_assumptions(
                 "line": match.line,
                 "target_scope": match.scope,
                 "explicit_empty_input": match.empty_input,
+                **(
+                    {"mapping_keys": list(match.mapping_keys)}
+                    if match.mapping_keys is not None
+                    else {}
+                ),
+                **({"expects_key_error": True} if match.expects_key_error else {}),
             },
             excerpt=match.matching_text,
             observed_at=observed_at,
@@ -403,6 +436,14 @@ def analyze_assumptions(
                 "end_line": candidate.end_line,
                 "detector_id": candidate.detector_id,
                 "signal": candidate.observed_signal,
+                **(
+                    {
+                        "base_expression": candidate.variable,
+                        "required_key": candidate.required_key,
+                    }
+                    if candidate.required_key is not None
+                    else {}
+                ),
             },
             excerpt=line_excerpt,
             observed_at=observed_at,
@@ -411,14 +452,40 @@ def analyze_assumptions(
         evidence_by_id[source_item.id] = source_item
         related = matches_by_scope.get(candidate.scope or "", [])
         candidate_tests = tuple(sorted({item.path for item in related}))
-        explicit_empty = any(item.empty_input for item in related)
-        if explicit_empty:
+        mapping_protection = candidate.required_key is not None
+        explicit_missing_key = any(
+            item.mapping_keys is not None and candidate.required_key not in item.mapping_keys
+            for item in related
+        )
+        key_error_characterization = any(
+            item.mapping_keys is not None
+            and candidate.required_key not in item.mapping_keys
+            and item.expects_key_error
+            for item in related
+        )
+        explicit_edge_case = (
+            explicit_missing_key
+            if mapping_protection
+            else any(item.empty_input for item in related)
+        )
+        if explicit_edge_case:
             protection = ProtectionStatus.PROTECTED
             protected_count += 1
-            uncertainty = (
-                "An explicit empty-input call was found in a candidate test; "
-                "the test was not executed."
-            )
+            if mapping_protection:
+                uncertainty = (
+                    "A missing-key behavior is explicitly tested with a mapping literal; "
+                    + (
+                        "a KeyError characterization is present. "
+                        if key_error_characterization
+                        else ""
+                    )
+                    + "Protection does not imply that production code handles the exception."
+                )
+            else:
+                uncertainty = (
+                    "An explicit empty-input call was found in a candidate test; "
+                    "the test was not executed."
+                )
         elif related or test_truncated or test_parse_failure or candidate.scope is None:
             protection = ProtectionStatus.UNKNOWN
             unknown_count += 1
@@ -437,13 +504,19 @@ def analyze_assumptions(
         ]
         finding_material = (
             f"{candidate.detector_id}\0{candidate.path}\0{candidate.line}\0"
-            f"{candidate.column}\0{candidate.observed_signal}\0{candidate.variable}"
+            f"{candidate.column}\0{candidate.observed_signal}\0{candidate.variable}\0"
+            f"{candidate.required_key or ''}"
+        )
+        title = (
+            "Unchecked required mapping key"
+            if candidate.required_key is not None
+            else "Unchecked collection cardinality"
         )
         findings.append(
             Finding(
                 id=f"finding_{hashlib.sha256(finding_material.encode()).hexdigest()[:12]}",
                 type="assumption",
-                title="Unchecked collection cardinality",
+                title=title,
                 claim=candidate.claim,
                 status=ClaimStatus.INFERRED,
                 confidence=min(candidate.confidence, candidate.confidence_ceiling),
@@ -461,6 +534,10 @@ def analyze_assumptions(
                     candidate_tests=candidate_tests,
                     uncertainty=uncertainty,
                     scope=candidate.scope,
+                    base_expression=(
+                        candidate.variable if candidate.required_key is not None else None
+                    ),
+                    required_key=candidate.required_key,
                 ),
             )
         )
@@ -495,11 +572,27 @@ def analyze_assumptions(
     status = AnalysisStatus.PARTIAL if limitations else AnalysisStatus.COMPLETE
     actual_findings = [item for item in findings if item.type == "assumption"]
     if actual_findings:
-        summary = (
-            f"Found {len(actual_findings)} supported non-empty collection signal(s) "
-            f"with {_DETECTOR.detector_id}; suppressed {len(suppressed)} guarded or "
-            "statically safe candidate(s)."
-        )
+        active_detector_ids = {
+            item.assumption.detector_id for item in actual_findings if item.assumption is not None
+        }
+        if active_detector_ids == {"python.non-empty-collection"}:
+            summary = (
+                f"Found {len(actual_findings)} supported non-empty collection signal(s) "
+                "with python.non-empty-collection; "
+                f"suppressed {len(suppressed)} guarded or statically safe candidate(s)."
+            )
+        elif active_detector_ids == {"python.required-mapping-key"}:
+            summary = (
+                f"Found {len(actual_findings)} supported required mapping-key signal(s) "
+                "with python.required-mapping-key; "
+                f"suppressed {len(suppressed)} guarded or statically safe candidate(s)."
+            )
+        else:
+            summary = (
+                f"Found {len(actual_findings)} supported data-assumption signal(s) "
+                f"across {len(active_detector_ids)} detector(s); "
+                f"suppressed {len(suppressed)} guarded or statically safe candidate(s)."
+            )
     elif filtered_count:
         summary = (
             "The active detector found no supported signal at or above the minimum confidence; "
@@ -507,7 +600,7 @@ def analyze_assumptions(
         )
     else:
         summary = (
-            "The active detector found no supported non-empty collection signal; "
+            "The active detectors found no supported data-assumption signal; "
             f"{len(suppressed)} candidate(s) were suppressed. "
             "The absence of other assumptions was not established."
         )
@@ -547,7 +640,7 @@ def analyze_assumptions(
             evidence_count=len(evidence),
         ),
         assumption_analysis=AssumptionAnalysis(
-            detectors_run=(_DETECTOR.detector_id,),
+            detectors_run=tuple(detector.detector_id for detector in _DETECTORS),
             categories_scanned=(AssumptionCategory.DATA,),
             suppression_count=len(suppressed),
         ),

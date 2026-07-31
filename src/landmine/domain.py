@@ -83,6 +83,8 @@ class AssumptionDetail:
     candidate_tests: tuple[str, ...] = ()
     uncertainty: str | None = None
     scope: str | None = None
+    base_expression: str | None = None
+    required_key: str | None = None
 
 
 @dataclass(frozen=True)

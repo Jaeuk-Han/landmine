@@ -1,0 +1,25 @@
+fixture_version: 1
+id: hidden-mapping-key
+query:
+  command: assumptions
+  target: src/parser.py
+expected:
+  detector_ids:
+    - python.non-empty-collection
+    - python.required-mapping-key
+  active:
+    - unsafe_access
+    - wrong_key_guard
+    - truthy_mapping_guard
+    - get_then_direct_access
+  suppressed:
+    - membership_guarded
+    - early_return_guarded
+    - early_raise_guarded
+    - assert_guarded
+    - assigned_before_access
+    - literal_mapping
+    - try_except_handled
+forbidden_claims:
+  - "All missing-key behavior is safely handled"
+  - "Candidate test discovery proves protection"

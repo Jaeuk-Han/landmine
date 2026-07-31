@@ -246,6 +246,104 @@ def hidden_cardinality(git_fixture: GitFixture) -> GitFixture:
     return git_fixture
 
 
+@pytest.fixture
+def hidden_mapping_key(git_fixture: GitFixture) -> GitFixture:
+    git_fixture.commit(
+        "initial",
+        "Add mapping key behavior",
+        {
+            "src/parser.py": (
+                "def unsafe_access(payload):\n"
+                '    return payload["user_id"]\n'
+                "\n"
+                "\n"
+                "def membership_guarded(payload):\n"
+                '    if "user_id" in payload:\n'
+                '        return payload["user_id"]\n'
+                "    return None\n"
+                "\n"
+                "\n"
+                "def early_return_guarded(payload):\n"
+                '    if "user_id" not in payload:\n'
+                "        return None\n"
+                '    return payload["user_id"]\n'
+                "\n"
+                "\n"
+                "def early_raise_guarded(payload):\n"
+                '    if "user_id" not in payload:\n'
+                '        raise ValueError("user_id required")\n'
+                '    return payload["user_id"]\n'
+                "\n"
+                "\n"
+                "def assert_guarded(payload):\n"
+                '    assert "user_id" in payload\n'
+                '    return payload["user_id"]\n'
+                "\n"
+                "\n"
+                "def assigned_before_access(payload):\n"
+                '    payload["user_id"] = create_id()\n'
+                '    return payload["user_id"]\n'
+                "\n"
+                "\n"
+                "def literal_mapping():\n"
+                '    payload = {"user_id": "known"}\n'
+                '    return payload["user_id"]\n'
+                "\n"
+                "\n"
+                "def try_except_handled(payload):\n"
+                "    try:\n"
+                '        return payload["user_id"]\n'
+                "    except KeyError:\n"
+                "        return None\n"
+                "\n"
+                "\n"
+                "def wrong_key_guard(payload):\n"
+                '    if "other_key" in payload:\n'
+                '        return payload["user_id"]\n'
+                "    return None\n"
+                "\n"
+                "\n"
+                "def truthy_mapping_guard(payload):\n"
+                "    if payload:\n"
+                '        return payload["user_id"]\n'
+                "    return None\n"
+                "\n"
+                "\n"
+                "def get_then_direct_access(payload):\n"
+                '    payload.get("user_id")\n'
+                '    return payload["user_id"]\n'
+            ),
+            "tests/test_parser.py": (
+                "import pytest\n"
+                "from parser import (\n"
+                "    get_then_direct_access,\n"
+                "    membership_guarded,\n"
+                "    truthy_mapping_guard,\n"
+                "    unsafe_access,\n"
+                ")\n"
+                "\n"
+                "\n"
+                "def test_unsafe_access_with_required_key():\n"
+                '    assert unsafe_access({"user_id": 7}) == 7\n'
+                "\n"
+                "\n"
+                "def test_membership_guarded_missing_key():\n"
+                "    assert membership_guarded({}) is None\n"
+                "\n"
+                "\n"
+                "def test_truthy_mapping_missing_key():\n"
+                "    assert truthy_mapping_guard({}) is None\n"
+                "\n"
+                "\n"
+                "def test_direct_access_characterizes_key_error():\n"
+                "    with pytest.raises(KeyError):\n"
+                "        get_then_direct_access({})\n"
+            ),
+        },
+    )
+    return git_fixture
+
+
 def repository_digest(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(item for item in root.rglob("*") if item.is_file()):

@@ -33,6 +33,8 @@ class AssumptionCandidate:
     confidence_ceiling: float
     scope: str | None = None
     suppression_reason: str | None = None
+    required_key: str | None = None
+    limitation_reason: str | None = None
 
 
 class AssumptionDetector(Protocol):
