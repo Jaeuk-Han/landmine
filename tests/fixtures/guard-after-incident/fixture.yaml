@@ -1,0 +1,19 @@
+fixture_version: 1
+id: guard-after-incident
+query:
+  command: why
+  target: src/routing.py:2-3
+expected:
+  evidence:
+    commit_tags:
+      - introduce_guard
+    paths:
+      - src/routing.py
+      - tests/test_routing.py
+  findings:
+    - type: historical_intent
+      status: verified
+  limitations_absent:
+    - shallow_history
+forbidden_claims:
+  - The external API contract guarantees empty responses

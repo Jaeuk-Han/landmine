@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://landmine.dev/schemas/result-v1.schema.json",
+  "title": "LandmineResultV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "analysis_id",
+    "analysis_status",
+    "command",
+    "generated_at",
+    "repository",
+    "request",
+    "summary",
+    "risk",
+    "findings",
+    "evidence",
+    "plan",
+    "limitations",
+    "metrics"
+  ],
+  "properties": {
+    "schema_version": {"const": "landmine.result.v1"},
+    "analysis_id": {"type": "string", "pattern": "^lm_[0-9a-f]{12}$"},
+    "analysis_status": {"enum": ["complete", "partial", "failed"]},
+    "command": {"enum": ["why", "assumptions", "blast", "defuse"]},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "repository": {"$ref": "#/$defs/repository"},
+    "request": {"type": "object"},
+    "summary": {"type": "string"},
+    "risk": {"$ref": "#/$defs/risk"},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
+    "plan": {"$ref": "#/$defs/plan"},
+    "limitations": {"type": "array", "items": {"$ref": "#/$defs/limitation"}},
+    "metrics": {"$ref": "#/$defs/metrics"}
+  },
+  "$defs": {
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "head", "base", "dirty", "shallow"],
+      "properties": {
+        "root": {"type": "string"},
+        "head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "base": {"type": ["string", "null"]},
+        "dirty": {"type": "boolean"},
+        "shallow": {"type": "boolean"}
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "grade", "components"],
+      "properties": {
+        "score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "grade": {"enum": ["low", "moderate", "high", "critical"]},
+        "components": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/scoreComponent"}
+        }
+      }
+    },
+    "scoreComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "weight", "signals"],
+      "properties": {
+        "value": {"type": "integer", "minimum": 0, "maximum": 100},
+        "weight": {"type": "number", "minimum": 0, "maximum": 1},
+        "signals": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "title",
+        "claim",
+        "status",
+        "confidence",
+        "impact",
+        "evidence_ids",
+        "tags"
+      ],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string"},
+        "title": {"type": "string"},
+        "claim": {"type": "string"},
+        "status": {"enum": ["verified", "inferred", "unknown"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "impact": {"enum": ["direct", "behavioral", "operational", "unknown"]},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "tags": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "locator",
+        "observed_at",
+        "excerpt",
+        "excerpt_sha256",
+        "command"
+      ],
+      "properties": {
+        "id": {"type": "string", "pattern": "^ev_[0-9a-f]{12}$"},
+        "kind": {
+          "enum": [
+            "source",
+            "test",
+            "git_commit",
+            "git_diff",
+            "git_blame",
+            "reference",
+            "config",
+            "documentation",
+            "command_output"
+          ]
+        },
+        "locator": {"type": "object"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "excerpt": {"type": ["string", "null"]},
+        "excerpt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "command": {"type": ["string", "null"]}
+      }
+    },
+    "limitation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "affected"],
+      "properties": {
+        "code": {
+          "enum": [
+            "shallow_history",
+            "budget_exhausted",
+            "unsupported_language",
+            "unresolved_target",
+            "missing_base",
+            "provider_failure",
+            "binary_or_generated"
+          ]
+        },
+        "message": {"type": "string"},
+        "affected": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preconditions", "tests", "steps", "verification", "rollback_triggers"],
+      "properties": {
+        "preconditions": {"type": "array", "items": {"type": "string"}},
+        "tests": {"type": "array", "items": {"type": "string"}},
+        "steps": {"type": "array", "items": {"type": "string"}},
+        "verification": {"type": "array", "items": {"type": "string"}},
+        "rollback_triggers": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["elapsed_ms", "files_scanned", "commits_scanned", "evidence_count"],
+      "properties": {
+        "elapsed_ms": {"type": "integer", "minimum": 0},
+        "files_scanned": {"type": "integer", "minimum": 0},
+        "commits_scanned": {"type": "integer", "minimum": 0},
+        "evidence_count": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

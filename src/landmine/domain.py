@@ -1,0 +1,123 @@
+"""Immutable domain objects for the stable v1 result contract."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+
+class AnalysisStatus(StrEnum):
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class ClaimStatus(StrEnum):
+    VERIFIED = "verified"
+    INFERRED = "inferred"
+    UNKNOWN = "unknown"
+
+
+class Impact(StrEnum):
+    DIRECT = "direct"
+    BEHAVIORAL = "behavioral"
+    OPERATIONAL = "operational"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class Target:
+    path: str | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+    symbol: str | None = None
+
+
+@dataclass(frozen=True)
+class RepositoryState:
+    root: str
+    head: str
+    dirty: bool
+    shallow: bool
+    base: str | None = None
+
+
+@dataclass(frozen=True)
+class Evidence:
+    id: str
+    kind: str
+    locator: dict[str, Any]
+    excerpt_sha256: str
+    observed_at: str
+    excerpt: str | None = None
+    command: str | None = None
+
+
+@dataclass(frozen=True)
+class Finding:
+    id: str
+    type: str
+    title: str
+    claim: str
+    status: ClaimStatus
+    confidence: float
+    evidence_ids: tuple[str, ...]
+    impact: Impact = Impact.UNKNOWN
+    tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ScoreComponent:
+    value: int
+    weight: float
+    signals: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Risk:
+    score: int
+    grade: str
+    components: dict[str, ScoreComponent]
+
+
+@dataclass(frozen=True)
+class Limitation:
+    code: str
+    message: str
+    affected: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Plan:
+    preconditions: tuple[str, ...] = ()
+    tests: tuple[str, ...] = ()
+    steps: tuple[str, ...] = ()
+    verification: tuple[str, ...] = ()
+    rollback_triggers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Metrics:
+    elapsed_ms: int
+    files_scanned: int
+    commits_scanned: int
+    evidence_count: int
+
+
+@dataclass(frozen=True)
+class Result:
+    schema_version: str
+    analysis_id: str
+    analysis_status: AnalysisStatus
+    command: str
+    generated_at: str
+    repository: RepositoryState
+    request: dict[str, Any]
+    summary: str
+    risk: Risk
+    findings: tuple[Finding, ...]
+    evidence: tuple[Evidence, ...]
+    plan: Plan = field(default_factory=Plan)
+    limitations: tuple[Limitation, ...] = ()
+    metrics: Metrics = field(default_factory=lambda: Metrics(0, 0, 0, 0))

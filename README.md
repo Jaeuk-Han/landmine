@@ -4,7 +4,9 @@
 
 Landmine은 Claude Code와 Codex를 위한 code-risk discovery plugin이다. 코드의 현재 모습만 검사하지 않고 Git 이력, 테스트, 의존 관계를 함께 분석하여 “왜 존재하는가”, “무엇을 당연하게 믿는가”, “바꾸면 어디까지 깨질 수 있는가”, “어떻게 안전하게 바꿀 것인가”에 답한다.
 
-이 패키지는 구현을 시작하기 위한 문서와 검증 가능한 Codex plugin/skill 골격이다. MVP 코드는 아직 포함하지 않는다.
+현재 Phase 0/1 vertical slice가 구현되어 `landmine why path[:line[-end]]`를 로컬 Git
+증거와 함께 Markdown 또는 `landmine.result.v1` JSON으로 출력한다. 나머지 세 capability는
+CLI에 표시되지만 후속 Phase 전까지 실행되지 않는다.
 
 ## Four capabilities
 
@@ -54,7 +56,7 @@ MVP는 코드를 자동 수정하거나, 원격 issue/PR을 조회하거나, 완
 - [CONTRIBUTING.md](CONTRIBUTING.md): 개발·PR 규칙
 - [SECURITY.md](SECURITY.md): 위협 모델과 안전 원칙
 
-## Planned repository
+## Repository
 
 ```text
 landmine/
@@ -68,13 +70,20 @@ landmine/
 │   ├── git.py
 │   ├── scoring.py
 │   ├── renderers.py
-│   └── analyzers/{why,assumptions,blast,defuse}.py
+│   └── analyzers/why.py
 ├── tests/{unit,integration,fixtures}/
 ├── hooks/
 ├── scripts/
 └── docs in this root
 ```
 
-## Start implementation
+## Development
 
-Codex는 [CODEX_HANDOFF.md](CODEX_HANDOFF.md)를 읽고 Phase 0부터 시작한다. 사용자에게 기술 선택을 다시 묻지 말고 이 문서의 기본값을 사용한다.
+```bash
+uv run --extra dev pytest
+uv run --extra dev ruff format --check .
+uv run --extra dev ruff check .
+uv run --extra dev mypy src
+```
+
+후속 구현은 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)의 Phase 순서를 따른다.
