@@ -34,7 +34,8 @@
     "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
     "plan": {"$ref": "#/$defs/plan"},
     "limitations": {"type": "array", "items": {"$ref": "#/$defs/limitation"}},
-    "metrics": {"$ref": "#/$defs/metrics"}
+    "metrics": {"$ref": "#/$defs/metrics"},
+    "error": {"$ref": "#/$defs/error"}
   },
   "$defs": {
     "repository": {
@@ -173,6 +174,36 @@
         "files_scanned": {"type": "integer", "minimum": 0},
         "commits_scanned": {"type": "integer", "minimum": 0},
         "evidence_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "line", "matching_text", "match_kind"],
+      "properties": {
+        "path": {"type": "string"},
+        "line": {"type": "integer", "minimum": 1},
+        "matching_text": {"type": "string"},
+        "match_kind": {"enum": ["definition", "reference"]}
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "candidates"],
+      "properties": {
+        "code": {
+          "enum": [
+            "ambiguous_symbol",
+            "symbol_not_found",
+            "symbol_search_budget_exhausted"
+          ]
+        },
+        "message": {"type": "string"},
+        "candidates": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/candidate"}
+        }
       }
     }
   }

@@ -11,6 +11,7 @@ from pathlib import Path
 from landmine.domain import (
     AnalysisStatus,
     ClaimStatus,
+    ErrorDetail,
     Finding,
     Impact,
     Limitation,
@@ -19,9 +20,14 @@ from landmine.domain import (
     Target,
 )
 from landmine.evidence import make_evidence
-from landmine.git import GitRunner, preflight
+from landmine.git import GitRunner, list_tracked_files, preflight
 from landmine.scoring import score_why
-from landmine.source import resolve_line_range, resolve_path_target
+from landmine.source import (
+    SymbolResolutionError,
+    resolve_line_range,
+    resolve_path_target,
+    resolve_symbol_target,
+)
 
 Clock = Callable[[], datetime]
 
@@ -60,6 +66,7 @@ def analyze_why(
     target: Target,
     timeout: float = 15.0,
     history_depth: int = 50,
+    max_files: int = 1000,
     clock: Clock = _utc_now,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> Result:
@@ -67,11 +74,79 @@ def analyze_why(
     started = monotonic()
     repository, runner = preflight(repo, timeout=timeout)
     root = runner.cwd
-    resolved = resolve_line_range(resolve_path_target(target, root), root)
+    observed_at = _timestamp(clock)
+    try:
+        if target.symbol is not None and target.path is None:
+            target = resolve_symbol_target(
+                target,
+                root,
+                list_tracked_files(runner),
+                max_files=max_files,
+                deadline=started + timeout,
+                monotonic=monotonic,
+            )
+        resolved = resolve_line_range(resolve_path_target(target, root), root)
+    except SymbolResolutionError as exc:
+        limitations = [
+            Limitation(
+                code="unresolved_target",
+                message=str(exc),
+                affected=(f"symbol:{exc.symbol}",),
+            )
+        ]
+        if repository.shallow:
+            limitations.append(
+                Limitation(
+                    code="shallow_history",
+                    message="Repository history is shallow.",
+                    affected=(f"symbol:{exc.symbol}",),
+                )
+            )
+        material = f"why\0{repository.head}\0symbol:{exc.symbol}\0{exc.code}\0" + ",".join(
+            f"{candidate.match_kind}:{candidate.path}:{candidate.line}"
+            for candidate in exc.candidates
+        )
+        return Result(
+            schema_version="landmine.result.v1",
+            analysis_id=f"lm_{hashlib.sha256(material.encode()).hexdigest()[:12]}",
+            analysis_status=AnalysisStatus.FAILED,
+            command="why",
+            generated_at=observed_at,
+            repository=repository,
+            request={
+                "target": {
+                    "path": None,
+                    "start_line": None,
+                    "end_line": None,
+                    "symbol": exc.symbol,
+                },
+                "change": None,
+                "goal": None,
+            },
+            summary=str(exc),
+            risk=score_why(
+                commit_count=0,
+                related_test_count=0,
+                shallow=repository.shallow,
+            ),
+            findings=(),
+            evidence=(),
+            limitations=tuple(limitations),
+            metrics=Metrics(
+                elapsed_ms=max(0, round((monotonic() - started) * 1000)),
+                files_scanned=exc.files_scanned,
+                commits_scanned=0,
+                evidence_count=0,
+            ),
+            error=ErrorDetail(
+                code=exc.code,
+                message=str(exc),
+                candidates=exc.candidates,
+            ),
+        )
     assert resolved.path is not None
     assert resolved.start_line is not None
     assert resolved.end_line is not None
-    observed_at = _timestamp(clock)
 
     blame_args = [
         "blame",

@@ -83,6 +83,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             target=target,
             timeout=args.timeout,
             history_depth=min(args.history_depth, args.max_commits),
+            max_files=args.max_files,
         )
     except TargetError as exc:
         parser.error(str(exc))
@@ -98,4 +99,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.output.write_text(rendered, encoding="utf-8")
     else:
         sys.stdout.write(rendered)
+    if result.error is not None:
+        return 2
     return 1 if result.analysis_status.value == "partial" else 0

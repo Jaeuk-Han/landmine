@@ -30,6 +30,8 @@ def result_dict(result: Result) -> dict[str, Any]:
     value = _primitive(result)
     if not isinstance(value, dict):
         raise TypeError("result serialization did not produce an object")
+    if value.get("error") is None:
+        del value["error"]
     return value
 
 
@@ -40,6 +42,27 @@ def render_json(result: Result) -> str:
 
 def render_markdown(result: Result) -> str:
     """Render the v1 section order without discovering or changing evidence."""
+    if result.error is not None:
+        lines = [
+            "# Landmine: why",
+            "",
+            "## Error",
+            "",
+            f"`{result.error.code}`: {result.error.message}",
+            "",
+            "## Candidates",
+            "",
+        ]
+        if result.error.candidates:
+            for candidate in result.error.candidates:
+                lines.append(
+                    f"- [{candidate.match_kind}] {candidate.path}:{candidate.line} "
+                    f"{candidate.matching_text!r}"
+                )
+        else:
+            lines.append("- No candidates found.")
+        lines.append("")
+        return "\n".join(lines)
     lines = [
         f"# Landmine: {result.command}",
         "",

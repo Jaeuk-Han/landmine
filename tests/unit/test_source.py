@@ -22,6 +22,10 @@ def test_parse_path_line_range_target() -> None:
     )
 
 
+def test_parse_symbol_target() -> None:
+    assert parse_target("symbol:HospitalFallback") == Target(symbol="HospitalFallback")
+
+
 def test_parse_windows_absolute_path_line_target() -> None:
     target = parse_target(r"C:\work\example.py:10-20")
     assert target.path == r"C:\work\example.py"

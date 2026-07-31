@@ -35,6 +35,21 @@ class Target:
 
 
 @dataclass(frozen=True)
+class SymbolCandidate:
+    path: str
+    line: int
+    matching_text: str
+    match_kind: str
+
+
+@dataclass(frozen=True)
+class ErrorDetail:
+    code: str
+    message: str
+    candidates: tuple[SymbolCandidate, ...] = ()
+
+
+@dataclass(frozen=True)
 class RepositoryState:
     root: str
     head: str
@@ -121,3 +136,4 @@ class Result:
     plan: Plan = field(default_factory=Plan)
     limitations: tuple[Limitation, ...] = ()
     metrics: Metrics = field(default_factory=lambda: Metrics(0, 0, 0, 0))
+    error: ErrorDetail | None = None

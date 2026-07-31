@@ -135,3 +135,11 @@ def preflight(path: Path, *, timeout: float = 15.0) -> tuple[RepositoryState, Gi
         ),
         runner,
     )
+
+
+def list_tracked_files(runner: GitRunner) -> tuple[str, ...]:
+    """List tracked paths without shell expansion or filesystem traversal."""
+    output = runner.run(["ls-files", "-z", "--"])
+    if output.truncated:
+        raise GitError("tracked file listing reached the configured output-size limit")
+    return tuple(sorted({path.replace("\\", "/") for path in output.stdout.split("\0") if path}))
