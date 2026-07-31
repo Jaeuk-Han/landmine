@@ -47,6 +47,9 @@ class AssumptionCandidate:
     http_library: str | None = None
     http_method: str | None = None
     provenance: tuple[ProvenanceObservation, ...] = ()
+    selection_operation: str | None = None
+    suggested_alternatives: tuple[str, ...] = ()
+    uncertainty_note: str | None = None
 
 
 class AssumptionDetector(Protocol):

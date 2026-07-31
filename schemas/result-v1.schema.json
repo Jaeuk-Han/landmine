@@ -284,7 +284,12 @@
         "base_expression": {"type": "string"},
         "required_key": {"type": "string"},
         "http_library": {"type": "string"},
-        "http_method": {"type": "string"}
+        "http_method": {"type": "string"},
+        "selection_operation": {"type": "string"},
+        "suggested_alternatives": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
       }
     },
     "assumptionAnalysis": {

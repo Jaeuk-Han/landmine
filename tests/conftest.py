@@ -622,6 +622,119 @@ def hidden_external_contract(git_fixture: GitFixture) -> GitFixture:
     return git_fixture
 
 
+@pytest.fixture
+def hidden_ordering(git_fixture: GitFixture) -> GitFixture:
+    git_fixture.commit(
+        "initial",
+        "Add set selection behavior",
+        {
+            "src/selector.py": (
+                "from typing import Set\n"
+                "\n"
+                "\n"
+                "def typed_set_next_iter(values: set[str]):\n"
+                "    return next(iter(values))\n"
+                "\n"
+                "\n"
+                "def typing_set_annotation(values: Set[str]):\n"
+                "    return next(iter(values))\n"
+                "\n"
+                "\n"
+                "def constructed_set_list_index(candidates):\n"
+                "    values = set(candidates)\n"
+                "    return list(values)[0]\n"
+                "\n"
+                "\n"
+                "def set_comprehension_tuple_index(items):\n"
+                "    values = {item for item in items}\n"
+                "    return tuple(values)[0]\n"
+                "\n"
+                "\n"
+                "def simple_set_alias(items):\n"
+                "    values = set(items)\n"
+                "    aliases = values\n"
+                "    return next(iter(aliases))\n"
+                "\n"
+                "\n"
+                "def rebound_set_variable(items):\n"
+                "    values = set(items)\n"
+                "    values = list(items)\n"
+                "    return next(iter(values))\n"
+                "\n"
+                "\n"
+                "def untyped_iterable(values):\n"
+                "    return next(iter(values))\n"
+                "\n"
+                "\n"
+                "def custom_factory(items):\n"
+                "    values = custom_set_factory(items)\n"
+                "    return next(iter(values))\n"
+                "\n"
+                "\n"
+                "def dict_literal():\n"
+                '    values = {"key": "value"}\n'
+                "    return next(iter(values))\n"
+                "\n"
+                "\n"
+                "def single_element_set():\n"
+                '    return next(iter({"only"}))\n'
+                "\n"
+                "\n"
+                "def guarded_but_arbitrary(values: set[str]):\n"
+                "    if values:\n"
+                "        return next(iter(values))\n"
+                "    return None\n"
+                "\n"
+                "\n"
+                "def asserted_but_arbitrary(values: set[str]):\n"
+                "    assert values\n"
+                "    return values.pop()\n"
+                "\n"
+                "\n"
+                "def set_pop(values: set[str]):\n"
+                "    return values.pop()\n"
+                "\n"
+                "\n"
+                "def for_loop_first_return(values: set[str]):\n"
+                "    for value in values:\n"
+                "        return value\n"
+                '    raise ValueError("empty")\n'
+                "\n"
+                "\n"
+                "def sorted_selection(values: set[str]):\n"
+                "    return sorted(values)[0]\n"
+                "\n"
+                "\n"
+                "def min_selection(values: set[str]):\n"
+                "    return min(values)\n"
+                "\n"
+                "\n"
+                "def max_selection(values: set[str]):\n"
+                "    return max(values)\n"
+                "\n"
+                "\n"
+                "def sorted_custom_key(values: set[str], priority):\n"
+                "    return sorted(values, key=priority)[0]\n"
+            ),
+            "tests/test_selector.py": (
+                "from selector import (\n"
+                "    constructed_set_list_index,\n"
+                "    typed_set_next_iter,\n"
+                ")\n"
+                "\n"
+                "\n"
+                "def test_typed_set_selection():\n"
+                '    assert typed_set_next_iter({"a", "b"}) in {"a", "b"}\n'
+                "\n"
+                "\n"
+                "def test_constructed_set_selection():\n"
+                '    assert constructed_set_list_index(["a"]) == "a"\n'
+            ),
+        },
+    )
+    return git_fixture
+
+
 def repository_digest(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(item for item in root.rglob("*") if item.is_file()):

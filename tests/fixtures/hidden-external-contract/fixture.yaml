@@ -9,6 +9,7 @@ expected:
     - python.required-mapping-key
     - python.required-environment-variable
     - python.required-response-field
+    - python.arbitrary-set-selection
   active:
     - requests_direct_json_access
     - requests_payload_assignment

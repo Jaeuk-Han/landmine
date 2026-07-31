@@ -49,6 +49,10 @@ def result_dict(result: Result) -> dict[str, Any]:
                 del assumption["http_library"]
             if assumption.get("http_method") is None:
                 del assumption["http_method"]
+            if assumption.get("selection_operation") is None:
+                del assumption["selection_operation"]
+            if not assumption.get("suggested_alternatives"):
+                del assumption["suggested_alternatives"]
     return value
 
 
@@ -129,12 +133,31 @@ def render_markdown(result: Result) -> str:
                         if detail.http_library is not None and detail.http_method is not None
                         else []
                     ),
+                    *(
+                        [f"- Selection operation: `{detail.selection_operation}`"]
+                        if detail.selection_operation is not None
+                        else []
+                    ),
                     f"- Violation: {detail.violation_scenario}",
                     f"- Consequence: {detail.consequence}",
                     f"- Confidence ceiling: {detail.confidence_ceiling:.2f}",
                     f"- Protection: {detail.protection.value}",
                     f"- Candidate tests: {candidate_tests}",
                     f"- Uncertainty: {detail.uncertainty or 'none recorded'}",
+                    *(
+                        [
+                            "- Suggested deterministic alternatives: "
+                            + ", ".join(
+                                f"`{alternative}`" for alternative in detail.suggested_alternatives
+                            ),
+                            (
+                                "- Alternative note: choose only an option whose semantics "
+                                "match the application; Landmine does not infer that rule."
+                            ),
+                        ]
+                        if detail.suggested_alternatives
+                        else []
+                    ),
                 ]
             )
             if detail.detector_id == "python.required-mapping-key":

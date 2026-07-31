@@ -1,0 +1,35 @@
+fixture_version: 1
+id: hidden-ordering
+query:
+  command: assumptions
+  target: src/selector.py
+expected:
+  detector_ids:
+    - python.non-empty-collection
+    - python.required-mapping-key
+    - python.required-environment-variable
+    - python.required-response-field
+    - python.arbitrary-set-selection
+  active:
+    - typed_set_next_iter
+    - typing_set_annotation
+    - constructed_set_list_index
+    - set_comprehension_tuple_index
+    - simple_set_alias
+    - guarded_but_arbitrary
+    - asserted_but_arbitrary
+    - set_pop
+    - for_loop_first_return
+    - sorted_custom_key
+  ignored:
+    - rebound_set_variable
+    - untyped_iterable
+    - custom_factory
+    - dict_literal
+    - single_element_set
+    - sorted_selection
+    - min_selection
+    - max_selection
+forbidden_claims:
+  - "Set iteration is always random"
+  - "A single unit test proves deterministic set ordering"

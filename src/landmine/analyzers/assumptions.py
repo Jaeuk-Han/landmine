@@ -10,6 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from landmine.assumptions import AnalysisContext, AssumptionCandidate, AssumptionDetector
+from landmine.detectors.python_arbitrary_set_selection import (
+    PythonArbitrarySetSelectionDetector,
+)
 from landmine.detectors.python_non_empty_collection import PythonNonEmptyCollectionDetector
 from landmine.detectors.python_required_environment_variable import (
     PythonRequiredEnvironmentVariableDetector,
@@ -52,6 +55,7 @@ _DETECTORS: tuple[AssumptionDetector, ...] = (
     PythonRequiredMappingKeyDetector(),
     PythonRequiredEnvironmentVariableDetector(),
     PythonRequiredResponseFieldDetector(),
+    PythonArbitrarySetSelectionDetector(),
 )
 
 
@@ -468,6 +472,8 @@ def analyze_assumptions(
         evidence_by_id[test_item.id] = test_item
 
     findings: list[Finding] = []
+    finding_sort_keys: dict[str, tuple[int, str, int, int, str]] = {}
+    detector_order = {detector.detector_id: index for index, detector in enumerate(_DETECTORS)}
     protected_count = 0
     unknown_count = 0
     filtered_count = 0
@@ -487,6 +493,7 @@ def analyze_assumptions(
                 "path": candidate.path,
                 "line": candidate.line,
                 "end_line": candidate.end_line,
+                "column": candidate.column,
                 "detector_id": candidate.detector_id,
                 "signal": candidate.observed_signal,
                 **(
@@ -504,6 +511,14 @@ def analyze_assumptions(
                         ),
                     }
                     if candidate.required_key is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "base_expression": candidate.variable,
+                        "selection_operation": candidate.selection_operation,
+                    }
+                    if candidate.selection_operation is not None
                     else {}
                 ),
             },
@@ -527,8 +542,19 @@ def analyze_assumptions(
                     "end_line": observation.end_line,
                     "detector_id": candidate.detector_id,
                     "provenance_role": observation.role,
-                    "http_library": candidate.http_library,
-                    "http_method": candidate.http_method,
+                    **(
+                        {
+                            "http_library": candidate.http_library,
+                            "http_method": candidate.http_method,
+                        }
+                        if candidate.http_library is not None and candidate.http_method is not None
+                        else {}
+                    ),
+                    **(
+                        {"set_expression": observation.expression}
+                        if candidate.selection_operation is not None
+                        else {}
+                    ),
                 },
                 excerpt=provenance_excerpt,
                 observed_at=observed_at,
@@ -541,6 +567,7 @@ def analyze_assumptions(
         environment_protection = candidate.detector_id == "python.required-environment-variable"
         mapping_protection = candidate.detector_id == "python.required-mapping-key"
         response_protection = candidate.detector_id == "python.required-response-field"
+        ordering_protection = candidate.detector_id == "python.arbitrary-set-selection"
         explicit_missing_key = any(
             item.mapping_keys is not None and candidate.required_key not in item.mapping_keys
             for item in related
@@ -577,7 +604,9 @@ def analyze_assumptions(
             )
             for item in related
         )
-        if response_protection:
+        if ordering_protection:
+            explicit_edge_case = False
+        elif response_protection:
             explicit_edge_case = explicit_missing_response_field
         elif environment_protection:
             explicit_edge_case = explicit_missing_environment
@@ -585,7 +614,20 @@ def analyze_assumptions(
             explicit_edge_case = explicit_missing_key
         else:
             explicit_edge_case = any(item.empty_input for item in related)
-        if explicit_edge_case:
+        if ordering_protection:
+            protection = ProtectionStatus.UNKNOWN
+            unknown_count += 1
+            uncertainty = (
+                (candidate.uncertainty_note + " ") if candidate.uncertainty_note is not None else ""
+            ) + (
+                "A related test does not prove deterministic set ordering."
+                if related
+                else (
+                    "Static analysis cannot establish deterministic set ordering; "
+                    "no multi-seed execution was performed."
+                )
+            )
+        elif explicit_edge_case:
             protection = ProtectionStatus.PROTECTED
             protected_count += 1
             if response_protection:
@@ -661,9 +703,11 @@ def analyze_assumptions(
         finding_material = (
             f"{candidate.detector_id}\0{candidate.path}\0{candidate.line}\0"
             f"{candidate.column}\0{candidate.observed_signal}\0{candidate.variable}\0"
-            f"{candidate.required_key or ''}"
+            f"{candidate.required_key or ''}\0{candidate.selection_operation or ''}"
         )
-        if response_protection:
+        if ordering_protection:
+            title = "Arbitrary set element selection"
+        elif response_protection:
             title = "Unchecked required response field"
         elif environment_protection:
             title = "Unchecked required environment variable"
@@ -671,9 +715,10 @@ def analyze_assumptions(
             title = "Unchecked required mapping key"
         else:
             title = "Unchecked collection cardinality"
+        finding_id = f"finding_{hashlib.sha256(finding_material.encode()).hexdigest()[:12]}"
         findings.append(
             Finding(
-                id=f"finding_{hashlib.sha256(finding_material.encode()).hexdigest()[:12]}",
+                id=finding_id,
                 type="assumption",
                 title=title,
                 claim=candidate.claim,
@@ -694,28 +739,28 @@ def analyze_assumptions(
                     uncertainty=uncertainty,
                     scope=candidate.scope,
                     base_expression=(
-                        candidate.variable if candidate.required_key is not None else None
+                        candidate.variable
+                        if candidate.required_key is not None
+                        or candidate.selection_operation is not None
+                        else None
                     ),
                     required_key=candidate.required_key,
                     http_library=candidate.http_library,
                     http_method=candidate.http_method,
+                    selection_operation=candidate.selection_operation,
+                    suggested_alternatives=candidate.suggested_alternatives,
                 ),
             )
         )
-
-    findings.sort(
-        key=lambda item: (
-            next(
-                (
-                    int(evidence_by_id[evidence_id].locator.get("line", 0))
-                    for evidence_id in item.evidence_ids
-                    if evidence_by_id[evidence_id].kind == "source"
-                ),
-                0,
-            ),
-            item.id,
+        finding_sort_keys[finding_id] = (
+            detector_order.get(candidate.detector_id, 999),
+            candidate.path,
+            candidate.line,
+            candidate.column,
+            finding_id,
         )
-    )
+
+    findings.sort(key=lambda item: finding_sort_keys[item.id])
     if not findings:
         findings.append(
             _no_evidence_finding(
@@ -764,6 +809,12 @@ def analyze_assumptions(
                 f"Found {len(actual_findings)} supported required response-field "
                 "signal(s) with python.required-response-field; "
                 f"suppressed {len(suppressed)} guarded or handled candidate(s)."
+            )
+        elif active_detector_ids == {"python.arbitrary-set-selection"}:
+            summary = (
+                f"Found {len(actual_findings)} supported arbitrary set-selection "
+                "signal(s) with python.arbitrary-set-selection; "
+                f"suppressed {len(suppressed)} statically deterministic candidate(s)."
             )
         else:
             summary = (

@@ -111,7 +111,7 @@ def test_external_contract_category_runs_only_response_detector(
     )
 
 
-def test_default_category_runs_all_four_detectors(
+def test_default_category_runs_all_five_detectors(
     hidden_external_contract: GitFixture,
 ) -> None:
     result = analyze(hidden_external_contract)
@@ -121,6 +121,7 @@ def test_default_category_runs_all_four_detectors(
         "python.required-mapping-key",
         "python.required-environment-variable",
         DETECTOR_ID,
+        "python.arbitrary-set-selection",
     )
 
 

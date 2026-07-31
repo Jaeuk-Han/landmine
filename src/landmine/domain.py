@@ -30,6 +30,7 @@ class AssumptionCategory(StrEnum):
     DATA = "data"
     ENVIRONMENT = "environment"
     EXTERNAL_CONTRACT = "external_contract"
+    ORDERING = "ordering"
 
 
 class ProtectionStatus(StrEnum):
@@ -89,6 +90,8 @@ class AssumptionDetail:
     required_key: str | None = None
     http_library: str | None = None
     http_method: str | None = None
+    selection_operation: str | None = None
+    suggested_alternatives: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

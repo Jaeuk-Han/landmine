@@ -121,6 +121,7 @@ def test_default_category_runs_all_detectors(
         "python.required-mapping-key",
         DETECTOR_ID,
         "python.required-response-field",
+        "python.arbitrary-set-selection",
     )
 
 
