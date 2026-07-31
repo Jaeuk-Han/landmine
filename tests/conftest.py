@@ -205,6 +205,47 @@ def line_modified_after_guard(git_fixture: GitFixture) -> GitFixture:
     return git_fixture
 
 
+@pytest.fixture
+def hidden_cardinality(git_fixture: GitFixture) -> GitFixture:
+    git_fixture.commit(
+        "initial",
+        "Add processor cardinality behavior",
+        {
+            "src/processor.py": (
+                "def process_unsafe(items):\n"
+                "    return items[0]\n"
+                "\n"
+                "\n"
+                "def process_guarded(items):\n"
+                "    if not items:\n"
+                "        return None\n"
+                "    return items[0]\n"
+                "\n"
+                "\n"
+                "def process_literal():\n"
+                "    return [1, 2][0]\n"
+                "\n"
+                "\n"
+                "def process_unpack(values):\n"
+                "    head, tail = values\n"
+                "    return head, tail\n"
+            ),
+            "tests/test_processor.py": (
+                "from processor import process_guarded, process_unsafe\n"
+                "\n"
+                "\n"
+                "def test_process_unsafe_with_values():\n"
+                "    assert process_unsafe([1]) == 1\n"
+                "\n"
+                "\n"
+                "def test_process_guarded_with_empty_input():\n"
+                "    assert process_guarded([]) is None\n"
+            ),
+        },
+    )
+    return git_fixture
+
+
 def repository_digest(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(item for item in root.rglob("*") if item.is_file()):

@@ -39,7 +39,8 @@
     "evolution": {
       "type": "array",
       "items": {"$ref": "#/$defs/evolutionCommit"}
-    }
+    },
+    "assumption_analysis": {"$ref": "#/$defs/assumptionAnalysis"}
   },
   "$defs": {
     "repository": {
@@ -100,7 +101,8 @@
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "impact": {"enum": ["direct", "behavioral", "operational", "unknown"]},
         "evidence_ids": {"type": "array", "items": {"type": "string"}},
-        "tags": {"type": "array", "items": {"type": "string"}}
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "assumption": {"$ref": "#/$defs/assumptionDetail"}
       }
     },
     "evidence": {
@@ -238,6 +240,73 @@
           "type": "array",
           "items": {"type": "string"}
         }
+      }
+    },
+    "assumptionDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "detector_id",
+        "category",
+        "observed_signal",
+        "violation_scenario",
+        "consequence",
+        "confidence_ceiling",
+        "protection",
+        "candidate_tests",
+        "uncertainty",
+        "scope"
+      ],
+      "properties": {
+        "detector_id": {"type": "string"},
+        "category": {
+          "enum": [
+            "input",
+            "data",
+            "ordering",
+            "time",
+            "concurrency",
+            "environment",
+            "filesystem",
+            "network",
+            "external_contract",
+            "authorization"
+          ]
+        },
+        "observed_signal": {"type": "string"},
+        "violation_scenario": {"type": "string"},
+        "consequence": {"type": "string"},
+        "confidence_ceiling": {"type": "number", "minimum": 0, "maximum": 1},
+        "protection": {"enum": ["protected", "unprotected", "unknown"]},
+        "candidate_tests": {"type": "array", "items": {"type": "string"}},
+        "uncertainty": {"type": ["string", "null"]},
+        "scope": {"type": ["string", "null"]}
+      }
+    },
+    "assumptionAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detectors_run", "categories_scanned", "suppression_count"],
+      "properties": {
+        "detectors_run": {"type": "array", "items": {"type": "string"}},
+        "categories_scanned": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "input",
+              "data",
+              "ordering",
+              "time",
+              "concurrency",
+              "environment",
+              "filesystem",
+              "network",
+              "external_contract",
+              "authorization"
+            ]
+          }
+        },
+        "suppression_count": {"type": "integer", "minimum": 0}
       }
     }
   }

@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from landmine import __version__
+from landmine.analyzers.assumptions import analyze_assumptions
 from landmine.analyzers.why import analyze_why
 from landmine.git import GitError, GitTimeout
 from landmine.renderers import render_json, render_markdown
@@ -25,6 +26,13 @@ def _positive_int(value: str) -> int:
     number = int(value)
     if number <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
+    return number
+
+
+def _confidence(value: str) -> float:
+    number = float(value)
+    if not 0.0 <= number <= 1.0:
+        raise argparse.ArgumentTypeError("must be between zero and one")
     return number
 
 
@@ -55,8 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
     why.add_argument("--follow-renames", action=argparse.BooleanOptionalAction, default=True)
     _add_shared_options(why)
 
-    assumptions = subparsers.add_parser("assumptions", help="find hidden constraints (Phase 2)")
+    assumptions = subparsers.add_parser("assumptions", help="find hidden constraints")
     assumptions.add_argument("target")
+    assumptions.add_argument("--category", choices=("data",), default="data")
+    assumptions.add_argument("--min-confidence", type=_confidence, default=0.0)
     _add_shared_options(assumptions)
 
     blast = subparsers.add_parser("blast", help="trace change impact (Phase 3)")
@@ -74,18 +84,30 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command != "why":
-        parser.error(f"{args.command} is visible in the CLI but is not implemented in Phase 0/1")
+    if args.command not in {"why", "assumptions"}:
+        parser.error(f"{args.command} is visible in the CLI but is not implemented")
     try:
         target = parse_target(args.target)
-        result = analyze_why(
-            repo=args.repo,
-            target=target,
-            timeout=args.timeout,
-            history_depth=min(args.history_depth, args.max_commits),
-            max_files=args.max_files,
-        )
+        if args.command == "why":
+            result = analyze_why(
+                repo=args.repo,
+                target=target,
+                timeout=args.timeout,
+                history_depth=min(args.history_depth, args.max_commits),
+                max_files=args.max_files,
+            )
+        else:
+            result = analyze_assumptions(
+                repo=args.repo,
+                target=target,
+                category=args.category,
+                min_confidence=args.min_confidence,
+                timeout=args.timeout,
+                max_files=args.max_files,
+            )
     except TargetError as exc:
+        parser.error(str(exc))
+    except ValueError as exc:
         parser.error(str(exc))
     except GitTimeout as exc:
         print(f"landmine: {exc}", file=sys.stderr)

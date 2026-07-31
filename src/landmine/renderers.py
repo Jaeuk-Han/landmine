@@ -34,6 +34,11 @@ def result_dict(result: Result) -> dict[str, Any]:
         del value["error"]
     if not value.get("evolution"):
         del value["evolution"]
+    if value.get("assumption_analysis") is None:
+        del value["assumption_analysis"]
+    for finding in value.get("findings", []):
+        if finding.get("assumption") is None:
+            del finding["assumption"]
     return value
 
 
@@ -46,7 +51,7 @@ def render_markdown(result: Result) -> str:
     """Render the v1 section order without discovering or changing evidence."""
     if result.error is not None:
         lines = [
-            "# Landmine: why",
+            f"# Landmine: {result.command}",
             "",
             "## Error",
             "",
@@ -88,9 +93,25 @@ def render_markdown(result: Result) -> str:
                 f"- Status: {finding.status.value} ({finding.confidence:.2f})",
                 f"- Claim: {finding.claim}",
                 f"- Evidence: {evidence}",
-                "",
             ]
         )
+        if finding.assumption is not None:
+            detail = finding.assumption
+            candidate_tests = ", ".join(detail.candidate_tests) or "none"
+            lines.extend(
+                [
+                    f"- Detector: `{detail.detector_id}`",
+                    f"- Category: {detail.category.value}",
+                    f"- Signal: {detail.observed_signal}",
+                    f"- Violation: {detail.violation_scenario}",
+                    f"- Consequence: {detail.consequence}",
+                    f"- Confidence ceiling: {detail.confidence_ceiling:.2f}",
+                    f"- Protection: {detail.protection.value}",
+                    f"- Candidate tests: {candidate_tests}",
+                    f"- Uncertainty: {detail.uncertainty or 'none recorded'}",
+                ]
+            )
+        lines.append("")
     if result.evolution:
         lines.extend(["## Evolution timeline", ""])
         for entry in result.evolution:
@@ -101,6 +122,19 @@ def render_markdown(result: Result) -> str:
                 f"subject (untrusted): {entry.subject!r}"
             )
         lines.append("")
+    if result.assumption_analysis is not None:
+        lines.extend(
+            [
+                "## Detector coverage",
+                "",
+                "- Detectors run: "
+                + ", ".join(f"`{item}`" for item in result.assumption_analysis.detectors_run),
+                "- Categories scanned: "
+                + ", ".join(item.value for item in result.assumption_analysis.categories_scanned),
+                f"- Suppression count: {result.assumption_analysis.suppression_count}",
+                "",
+            ]
+        )
     lines.extend(["## Evidence", ""])
     for item in result.evidence:
         locator = ", ".join(f"{key}={value}" for key, value in sorted(item.locator.items()))

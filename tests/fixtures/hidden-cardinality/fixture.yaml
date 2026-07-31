@@ -1,0 +1,22 @@
+fixture_version: 1
+id: hidden-cardinality
+query:
+  command: assumptions
+  target: src/processor.py
+expected:
+  detector_ids: [python.non-empty-collection]
+  findings:
+    - function: process_unsafe
+      signal: zero_index
+      protection: unknown
+    - function: process_unpack
+      signal: fixed_length_unpack
+      protection: unprotected
+  suppressed:
+    - function: process_guarded
+      reason: early_exit_guard
+    - function: process_literal
+      reason: statically_non_empty
+forbidden_claims:
+  - "All empty inputs are covered by tests"
+  - "No other assumptions exist"

@@ -26,6 +26,16 @@ class Impact(StrEnum):
     UNKNOWN = "unknown"
 
 
+class AssumptionCategory(StrEnum):
+    DATA = "data"
+
+
+class ProtectionStatus(StrEnum):
+    PROTECTED = "protected"
+    UNPROTECTED = "unprotected"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class Target:
     path: str | None = None
@@ -62,6 +72,27 @@ class EvolutionCommit:
 
 
 @dataclass(frozen=True)
+class AssumptionDetail:
+    detector_id: str
+    category: AssumptionCategory
+    observed_signal: str
+    violation_scenario: str
+    consequence: str
+    confidence_ceiling: float
+    protection: ProtectionStatus
+    candidate_tests: tuple[str, ...] = ()
+    uncertainty: str | None = None
+    scope: str | None = None
+
+
+@dataclass(frozen=True)
+class AssumptionAnalysis:
+    detectors_run: tuple[str, ...]
+    categories_scanned: tuple[AssumptionCategory, ...]
+    suppression_count: int
+
+
+@dataclass(frozen=True)
 class RepositoryState:
     root: str
     head: str
@@ -92,6 +123,7 @@ class Finding:
     evidence_ids: tuple[str, ...]
     impact: Impact = Impact.UNKNOWN
     tags: tuple[str, ...] = ()
+    assumption: AssumptionDetail | None = None
 
 
 @dataclass(frozen=True)
@@ -150,3 +182,4 @@ class Result:
     metrics: Metrics = field(default_factory=lambda: Metrics(0, 0, 0, 0))
     error: ErrorDetail | None = None
     evolution: tuple[EvolutionCommit, ...] = ()
+    assumption_analysis: AssumptionAnalysis | None = None
