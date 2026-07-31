@@ -35,7 +35,11 @@
     "plan": {"$ref": "#/$defs/plan"},
     "limitations": {"type": "array", "items": {"$ref": "#/$defs/limitation"}},
     "metrics": {"$ref": "#/$defs/metrics"},
-    "error": {"$ref": "#/$defs/error"}
+    "error": {"$ref": "#/$defs/error"},
+    "evolution": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/evolutionCommit"}
+    }
   },
   "$defs": {
     "repository": {
@@ -203,6 +207,36 @@
         "candidates": {
           "type": "array",
           "items": {"$ref": "#/$defs/candidate"}
+        }
+      }
+    },
+    "evolutionCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "timestamp",
+        "subject",
+        "path",
+        "start_line",
+        "end_line",
+        "roles",
+        "evidence_ids"
+      ],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "timestamp": {"type": "string", "format": "date-time"},
+        "subject": {"type": "string"},
+        "path": {"type": "string"},
+        "start_line": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "roles": {
+          "type": "array",
+          "items": {"enum": ["introduction", "intermediate", "latest"]}
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {"type": "string"}
         }
       }
     }

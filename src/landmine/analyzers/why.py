@@ -12,6 +12,7 @@ from landmine.domain import (
     AnalysisStatus,
     ClaimStatus,
     ErrorDetail,
+    EvolutionCommit,
     Finding,
     Impact,
     Limitation,
@@ -19,8 +20,16 @@ from landmine.domain import (
     Result,
     Target,
 )
-from landmine.evidence import make_evidence
-from landmine.git import GitRunner, list_tracked_files, preflight
+from landmine.evidence import make_evidence, safe_excerpt
+from landmine.git import (
+    GitRunner,
+    GitTimeout,
+    LineLogRecord,
+    line_log,
+    list_tracked_files,
+    parse_line_log,
+    preflight,
+)
 from landmine.scoring import score_why
 from landmine.source import (
     SymbolResolutionError,
@@ -173,37 +182,55 @@ def analyze_why(
     )
     evidence_by_id[blame_evidence.id] = blame_evidence
 
-    commit_evidence_ids: list[str] = []
-    related_test_ids: list[str] = []
-    related_test_paths: set[str] = set()
-    for commit in commits:
-        summary, paths = _commit_summary_and_paths(runner, commit)
-        item = make_evidence(
-            kind="git_commit",
-            locator={"commit": commit, "paths": list(paths)},
-            excerpt=summary,
-            observed_at=observed_at,
-            command="git show --format=<fields> --name-only --find-renames <commit>",
+    line_records: tuple[LineLogRecord, ...] = ()
+    line_history_limitation: Limitation | None = None
+    try:
+        line_output = line_log(
+            runner,
+            path=resolved.path,
+            start_line=resolved.start_line,
+            end_line=resolved.end_line,
+            max_commits=history_depth,
         )
-        evidence_by_id[item.id] = item
-        commit_evidence_ids.append(item.id)
-        for path in paths:
-            lowered = path.lower()
-            if (
-                lowered.startswith("test")
-                or "/test" in lowered
-                or lowered.endswith(("_test.py", ".spec.ts", ".test.ts"))
-            ):
-                test_item = make_evidence(
-                    kind="test",
-                    locator={"commit": commit, "path": path},
-                    excerpt=f"Related test changed in the blamed commit: {path}",
-                    observed_at=observed_at,
-                    command="git show --name-only <commit>",
+        if line_output.returncode != 0:
+            line_history_limitation = Limitation(
+                code="provider_failure",
+                message="git log -L failed; git log --follow evidence was used as fallback.",
+                affected=(resolved.path,),
+            )
+        elif line_output.truncated:
+            line_history_limitation = Limitation(
+                code="budget_exhausted",
+                message="git log -L reached the configured output-size limit.",
+                affected=(resolved.path,),
+            )
+        else:
+            line_records = parse_line_log(line_output.stdout)
+            if not line_records:
+                line_history_limitation = Limitation(
+                    code="provider_failure",
+                    message=(
+                        "git log -L returned no parseable evolution; "
+                        "git log --follow evidence was used as fallback."
+                    ),
+                    affected=(resolved.path,),
                 )
-                evidence_by_id[test_item.id] = test_item
-                related_test_ids.append(test_item.id)
-                related_test_paths.add(path)
+            elif not set(commits).issubset({record.commit for record in line_records}):
+                line_records = ()
+                line_history_limitation = Limitation(
+                    code="provider_failure",
+                    message=(
+                        "git log -L did not cover the blamed commit, possibly due to a rename; "
+                        "git log --follow evidence was used as fallback."
+                    ),
+                    affected=(resolved.path,),
+                )
+    except GitTimeout:
+        line_history_limitation = Limitation(
+            code="budget_exhausted",
+            message="git log -L timed out; git log --follow evidence was used as fallback.",
+            affected=(resolved.path,),
+        )
 
     log = runner.run(
         [
@@ -225,21 +252,140 @@ def analyze_why(
     )
     evidence_by_id[log_item.id] = log_item
 
-    primary_ids = tuple(sorted({blame_evidence.id, *commit_evidence_ids}))
-    if commits:
+    commit_evidence_by_sha: dict[str, str] = {}
+    evolution_diff_by_sha: dict[str, str] = {}
+    tests_by_commit: dict[str, list[str]] = {}
+    related_test_ids: list[str] = []
+    related_test_paths: set[str] = set()
+    commits_to_inspect = tuple(sorted({*commits, *(record.commit for record in line_records)}))
+    for record in line_records:
+        diff_item = make_evidence(
+            kind="git_diff",
+            locator={
+                "commit": record.commit,
+                "path": resolved.path,
+                "start_line": resolved.start_line,
+                "end_line": resolved.end_line,
+                "timestamp": record.timestamp,
+                "line_evolution": True,
+            },
+            excerpt=record.diff,
+            observed_at=observed_at,
+            command="git log --format=<fields> --patch -L <range>:<path>",
+        )
+        evidence_by_id[diff_item.id] = diff_item
+        evolution_diff_by_sha[record.commit] = diff_item.id
+
+    for commit in commits_to_inspect:
+        summary, paths = _commit_summary_and_paths(runner, commit)
+        item = make_evidence(
+            kind="git_commit",
+            locator={"commit": commit, "paths": list(paths)},
+            excerpt=summary,
+            observed_at=observed_at,
+            command="git show --format=<fields> --name-only --find-renames <commit>",
+        )
+        evidence_by_id[item.id] = item
+        commit_evidence_by_sha[commit] = item.id
+        tests_by_commit[commit] = []
+        for path in paths:
+            lowered = path.lower()
+            if (
+                lowered.startswith("test")
+                or "/test" in lowered
+                or lowered.endswith(("_test.py", ".spec.ts", ".test.ts"))
+            ):
+                test_item = make_evidence(
+                    kind="test",
+                    locator={"commit": commit, "path": path},
+                    excerpt=f"Related test changed in the blamed commit: {path}",
+                    observed_at=observed_at,
+                    command="git show --name-only <commit>",
+                )
+                evidence_by_id[test_item.id] = test_item
+                related_test_ids.append(test_item.id)
+                related_test_paths.add(path)
+                tests_by_commit[commit].append(test_item.id)
+
+    primary_commit: str | None = None
+    if line_records:
+        corroborated = tuple(
+            record
+            for record in line_records
+            if evolution_diff_by_sha.get(record.commit) and tests_by_commit.get(record.commit)
+        )
+        primary_commit = corroborated[0].commit if corroborated else line_records[0].commit
+
+    evolution: list[EvolutionCommit] = []
+    for index, record in enumerate(line_records):
+        roles: list[str] = []
+        if record.commit == primary_commit:
+            roles.append("introduction")
+        if index == len(line_records) - 1:
+            roles.append("latest")
+        if not roles:
+            roles.append("intermediate")
+        entry_evidence = {
+            commit_evidence_by_sha[record.commit],
+            evolution_diff_by_sha[record.commit],
+            *tests_by_commit.get(record.commit, ()),
+        }
+        evolution.append(
+            EvolutionCommit(
+                commit=record.commit,
+                timestamp=record.timestamp,
+                subject=safe_excerpt(record.subject, max_lines=1, max_chars=500),
+                path=resolved.path,
+                start_line=resolved.start_line,
+                end_line=resolved.end_line,
+                roles=tuple(roles),
+                evidence_ids=tuple(sorted(entry_evidence)),
+            )
+        )
+
+    if primary_commit is not None:
+        primary_ids = {
+            commit_evidence_by_sha[primary_commit],
+            evolution_diff_by_sha[primary_commit],
+            *tests_by_commit.get(primary_commit, ()),
+        }
+        corroborated_intent = bool(tests_by_commit.get(primary_commit))
         historical = Finding(
             id="finding_historical_intent",
             type="historical_intent",
             title="Historical introduction evidence",
             claim=(
-                "The selected lines are linked by blame to "
-                f"{len(commits)} commit(s); commit text is reported only as untrusted evidence."
+                f"Commit {primary_commit} is the earliest line-evolution change "
+                + (
+                    "corroborated by a source diff and regression-test change."
+                    if corroborated_intent
+                    else "with source-diff evidence; no same-commit regression test was found."
+                )
             ),
-            status=ClaimStatus.VERIFIED,
-            confidence=0.9,
+            status=(ClaimStatus.VERIFIED if corroborated_intent else ClaimStatus.INFERRED),
+            confidence=0.9 if corroborated_intent else 0.65,
             impact=Impact.BEHAVIORAL,
-            evidence_ids=primary_ids,
+            evidence_ids=tuple(sorted(primary_ids)),
             tags=("history",),
+        )
+    elif commits:
+        fallback_ids = {
+            blame_evidence.id,
+            *(commit_evidence_by_sha[commit] for commit in commits),
+        }
+        historical = Finding(
+            id="finding_historical_intent",
+            type="historical_intent",
+            title="Historical introduction evidence is inferred",
+            claim=(
+                "Line evolution was unavailable; blame and follow-history evidence "
+                "identify only the current attribution."
+            ),
+            status=ClaimStatus.INFERRED,
+            confidence=0.6,
+            impact=Impact.BEHAVIORAL,
+            evidence_ids=tuple(sorted(fallback_ids)),
+            tags=("history", "fallback"),
         )
     else:
         historical = Finding(
@@ -253,6 +399,9 @@ def analyze_why(
             evidence_ids=(blame_evidence.id,),
             tags=("history",),
         )
+    latest_ids = {blame_evidence.id}
+    if evolution:
+        latest_ids.update(evolution[-1].evidence_ids)
     current = Finding(
         id="finding_current_relevance",
         type="current_relevance",
@@ -264,10 +413,18 @@ def analyze_why(
         status=ClaimStatus.VERIFIED,
         confidence=0.95,
         impact=Impact.DIRECT,
-        evidence_ids=(blame_evidence.id,),
+        evidence_ids=tuple(sorted(latest_ids)),
         tags=("current",),
     )
-    protection_ids = tuple(sorted({*primary_ids, *related_test_ids}))
+    protection_ids = tuple(
+        sorted(
+            {
+                blame_evidence.id,
+                *commit_evidence_by_sha.values(),
+                *related_test_ids,
+            }
+        )
+    )
     removal = Finding(
         id="finding_removal_risk",
         type="removal_risk",
@@ -291,6 +448,8 @@ def analyze_why(
             affected=(resolved.path,),
         )
     ]
+    if line_history_limitation is not None:
+        limitations.append(line_history_limitation)
     if repository.shallow:
         limitations.append(
             Limitation(
@@ -309,7 +468,12 @@ def analyze_why(
         )
     status = (
         AnalysisStatus.PARTIAL
-        if repository.shallow or blame.truncated or log.truncated
+        if (
+            repository.shallow
+            or blame.truncated
+            or log.truncated
+            or line_history_limitation is not None
+        )
         else AnalysisStatus.COMPLETE
     )
     evidence = tuple(
@@ -324,7 +488,7 @@ def analyze_why(
         )
     )
     risk = score_why(
-        commit_count=len(commits),
+        commit_count=len(commits_to_inspect),
         related_test_count=len(related_test_paths),
         shallow=repository.shallow,
     )
@@ -352,7 +516,7 @@ def analyze_why(
             "goal": None,
         },
         summary=(
-            f"Recovered {len(commits)} blamed commit(s) and "
+            f"Recovered {len(evolution)} line-evolution commit(s) and "
             f"{len(related_test_paths)} related test file(s) for {resolved.path}."
         ),
         risk=risk,
@@ -362,7 +526,8 @@ def analyze_why(
         metrics=Metrics(
             elapsed_ms=elapsed_ms,
             files_scanned=1 + len(related_test_paths),
-            commits_scanned=len(commits),
+            commits_scanned=len(commits_to_inspect),
             evidence_count=len(evidence),
         ),
+        evolution=tuple(evolution),
     )

@@ -141,6 +141,70 @@ def guard_after_incident(git_fixture: GitFixture) -> GitFixture:
     return git_fixture
 
 
+@pytest.fixture
+def line_modified_after_guard(git_fixture: GitFixture) -> GitFixture:
+    git_fixture.commit(
+        "initial_behavior",
+        "Add unsafe route selection",
+        {
+            "src/routing.py": (
+                'def select_route(results):\n    label = "route"\n    return results[0]\n'
+            )
+        },
+    )
+    git_fixture.commit(
+        "introduce_guard",
+        "Guard empty route results after incident",
+        {
+            "src/routing.py": (
+                'HospitalFallback = "fallback"\n'
+                "\n"
+                "def select_route(results):\n"
+                '    label = "route"\n'
+                "    if not results:\n"
+                "        return HospitalFallback\n"
+                "    return results[0]\n"
+            ),
+            "tests/test_routing.py": (
+                "from routing import select_route\n\n"
+                "def test_empty_results_use_fallback():\n"
+                '    assert select_route([]) == "fallback"\n'
+            ),
+        },
+    )
+    git_fixture.commit(
+        "refactor_guard",
+        "Rename route result variable",
+        {
+            "src/routing.py": (
+                'HospitalFallback: str = "fallback"\n'
+                "\n"
+                "def select_route(routes):\n"
+                '    label = "route"\n'
+                "    if not routes:\n"
+                "        return HospitalFallback\n"
+                "    return routes[0]\n"
+            )
+        },
+    )
+    git_fixture.commit(
+        "format_unrelated",
+        "Normalize unrelated label quoting",
+        {
+            "src/routing.py": (
+                'HospitalFallback: str = "fallback"\n'
+                "\n"
+                "def select_route(routes):\n"
+                "    label = 'route'\n"
+                "    if not routes:\n"
+                "        return HospitalFallback\n"
+                "    return routes[0]\n"
+            )
+        },
+    )
+    return git_fixture
+
+
 def repository_digest(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(item for item in root.rglob("*") if item.is_file()):

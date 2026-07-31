@@ -32,6 +32,8 @@ def result_dict(result: Result) -> dict[str, Any]:
         raise TypeError("result serialization did not produce an object")
     if value.get("error") is None:
         del value["error"]
+    if not value.get("evolution"):
+        del value["evolution"]
     return value
 
 
@@ -89,6 +91,16 @@ def render_markdown(result: Result) -> str:
                 "",
             ]
         )
+    if result.evolution:
+        lines.extend(["## Evolution timeline", ""])
+        for entry in result.evolution:
+            roles = ", ".join(entry.roles)
+            lines.append(
+                f"- `{entry.timestamp}` `{entry.commit[:12]}` ({roles}) "
+                f"{entry.path}:{entry.start_line}-{entry.end_line} - "
+                f"subject (untrusted): {entry.subject!r}"
+            )
+        lines.append("")
     lines.extend(["## Evidence", ""])
     for item in result.evidence:
         locator = ", ".join(f"{key}={value}" for key, value in sorted(item.locator.items()))

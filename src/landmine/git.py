@@ -42,6 +42,14 @@ class GitOutput:
     truncated: bool = False
 
 
+@dataclass(frozen=True)
+class LineLogRecord:
+    commit: str
+    timestamp: str
+    subject: str
+    diff: str
+
+
 class GitRunner:
     """Run allowlisted Git queries with argument arrays and no shell."""
 
@@ -143,3 +151,51 @@ def list_tracked_files(runner: GitRunner) -> tuple[str, ...]:
     if output.truncated:
         raise GitError("tracked file listing reached the configured output-size limit")
     return tuple(sorted({path.replace("\\", "/") for path in output.stdout.split("\0") if path}))
+
+
+def line_log(
+    runner: GitRunner,
+    *,
+    path: str,
+    start_line: int,
+    end_line: int,
+    max_commits: int,
+) -> GitOutput:
+    """Query line evolution with one argument-array invocation."""
+    return runner.run(
+        [
+            "log",
+            f"--max-count={max(1, max_commits)}",
+            "--format=%x1e%H%x1f%aI%x1f%s",
+            "--patch",
+            "-L",
+            f"{start_line},{end_line}:{path}",
+        ],
+        check=False,
+    )
+
+
+def parse_line_log(output: str) -> tuple[LineLogRecord, ...]:
+    """Parse custom-delimited ``git log -L`` output oldest-first."""
+    records: list[LineLogRecord] = []
+    for block in output.split("\x1e"):
+        block = block.lstrip("\r\n")
+        if not block:
+            continue
+        header, separator, diff = block.partition("\n")
+        fields = header.rstrip("\r").split("\x1f", 2)
+        if not separator or len(fields) != 3:
+            continue
+        commit, timestamp, subject = fields
+        if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
+            continue
+        records.append(
+            LineLogRecord(
+                commit=commit,
+                timestamp=timestamp,
+                subject=subject,
+                diff=diff.strip(),
+            )
+        )
+    records.reverse()
+    return tuple(records)

@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from landmine.git import GitError, GitRunner
+from landmine.git import GitError, GitRunner, line_log
 
 
 def test_git_runner_uses_argument_array(tmp_path: Path) -> None:
@@ -31,3 +31,21 @@ def test_git_runner_truncates_output(tmp_path: Path) -> None:
         output = GitRunner(tmp_path, max_output_bytes=8).run(["status"])
     assert output.truncated is True
     assert len(output.stdout.encode()) + len(output.stderr.encode()) == 8
+
+
+def test_log_l_uses_argument_array(tmp_path: Path) -> None:
+    runner = GitRunner(tmp_path)
+    completed = CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+    with patch("landmine.git.subprocess.run", return_value=completed) as run:
+        line_log(
+            runner,
+            path="src/routing.py",
+            start_line=5,
+            end_line=6,
+            max_commits=50,
+        )
+    command = run.call_args.args[0]
+    assert isinstance(command, list)
+    assert "-L" in command
+    assert "5,6:src/routing.py" in command
+    assert run.call_args.kwargs["shell"] is False

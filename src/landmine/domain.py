@@ -50,6 +50,18 @@ class ErrorDetail:
 
 
 @dataclass(frozen=True)
+class EvolutionCommit:
+    commit: str
+    timestamp: str
+    subject: str
+    path: str
+    start_line: int
+    end_line: int
+    roles: tuple[str, ...]
+    evidence_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class RepositoryState:
     root: str
     head: str
@@ -137,3 +149,4 @@ class Result:
     limitations: tuple[Limitation, ...] = ()
     metrics: Metrics = field(default_factory=lambda: Metrics(0, 0, 0, 0))
     error: ErrorDetail | None = None
+    evolution: tuple[EvolutionCommit, ...] = ()
