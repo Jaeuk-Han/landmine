@@ -1,0 +1,35 @@
+# Local design documents
+/AGENTS.md
+/ARCHITECTURE.md
+/CODEX_HANDOFF.md
+/COMMANDS.md
+/EVALUATION.md
+/IMPLEMENTATION_PLAN.md
+/OUTPUT_SCHEMA.md
+/PRODUCT_SPEC.md
+/tests/fixtures/README.md
+
+# Future local planning documents
+/.planning/
+*.local.md
+
+# Local working artifacts
+/work/
+/outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+.DS_Store
+Thumbs.db

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Landmine"
+  short_description: "변경 전 코드의 숨은 위험과 영향 반경을 분석합니다"
+  default_prompt: "이 변경의 역사적 의도, 숨은 가정, 영향 반경을 분석하고 안전한 수정 계획을 제안해줘."

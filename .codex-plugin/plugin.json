@@ -1,0 +1,24 @@
+{
+  "name": "landmine",
+  "version": "0.1.0",
+  "description": "Discover historical intent, hidden assumptions, and change blast radius before editing code.",
+  "author": {
+    "name": "Landmine contributors"
+  },
+  "license": "MIT",
+  "keywords": ["git", "code-risk", "impact-analysis", "agent-skill"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Landmine",
+    "shortDescription": "Find hidden code risks before making a change.",
+    "longDescription": "Landmine recovers historical intent from Git, extracts hidden assumptions, predicts change blast radius, and prepares a safe modification and test plan.",
+    "developerName": "Landmine contributors",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Analyze"],
+    "defaultPrompt": [
+      "Explain why this code exists using Git evidence.",
+      "Find hidden assumptions in this module.",
+      "Predict the blast radius and propose a safe change plan."
+    ]
+  }
+}
