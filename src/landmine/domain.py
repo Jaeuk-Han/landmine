@@ -32,6 +32,7 @@ class AssumptionCategory(StrEnum):
     EXTERNAL_CONTRACT = "external_contract"
     ORDERING = "ordering"
     FILESYSTEM = "filesystem"
+    TIME = "time"
 
 
 class ProtectionStatus(StrEnum):
@@ -97,6 +98,9 @@ class AssumptionDetail:
     access_operation: str | None = None
     api_binding: str | None = None
     path_anchor: str | None = None
+    clock_source: str | None = None
+    clock_unit: str | None = None
+    time_operation: str | None = None
 
 
 @dataclass(frozen=True)

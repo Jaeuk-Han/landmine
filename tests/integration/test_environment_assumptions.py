@@ -123,6 +123,7 @@ def test_default_category_runs_all_detectors(
         "python.required-response-field",
         "python.arbitrary-set-selection",
         "python.cwd-relative-file-access",
+        "python.wall-clock-elapsed-time",
     )
 
 

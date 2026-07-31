@@ -293,7 +293,10 @@
         "path_literal": {"type": "string"},
         "access_operation": {"type": "string"},
         "api_binding": {"type": "string"},
-        "path_anchor": {"type": "string"}
+        "path_anchor": {"type": "string"},
+        "clock_source": {"type": "string"},
+        "clock_unit": {"type": "string"},
+        "time_operation": {"enum": ["duration", "deadline"]}
       }
     },
     "assumptionAnalysis": {

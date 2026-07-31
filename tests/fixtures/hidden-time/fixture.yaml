@@ -1,0 +1,36 @@
+fixture_version: 1
+id: hidden-time
+query:
+  command: assumptions
+  target: src/timeout_logic.py
+expected:
+  detector_ids:
+    - python.non-empty-collection
+    - python.required-mapping-key
+    - python.required-environment-variable
+    - python.required-response-field
+    - python.arbitrary-set-selection
+    - python.cwd-relative-file-access
+    - python.wall-clock-elapsed-time
+  active:
+    - time_duration
+    - time_ns_duration
+    - imported_time_alias
+    - module_alias
+    - returned_duration
+    - deadline_if
+    - deadline_loop
+    - mixed_clock_domains
+  ignored:
+    - timestamp_only
+    - logged_timestamp
+    - monotonic_duration
+    - monotonic_ns_duration
+    - perf_counter_duration
+    - rebound_start
+    - rebound_time_module
+    - dynamic_clock_parameter
+    - helper_returned_start
+forbidden_claims:
+  - "time.time always moves backward"
+  - "A fixed clock mock proves adjustment safety"

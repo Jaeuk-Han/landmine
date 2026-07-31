@@ -81,7 +81,7 @@ def test_ordering_category_runs_only_ordering_detector(
     )
 
 
-def test_default_category_runs_all_six_detectors(
+def test_default_category_runs_all_seven_detectors(
     hidden_ordering: GitFixture,
 ) -> None:
     result = analyze(hidden_ordering)
@@ -93,6 +93,7 @@ def test_default_category_runs_all_six_detectors(
         "python.required-response-field",
         DETECTOR_ID,
         "python.cwd-relative-file-access",
+        "python.wall-clock-elapsed-time",
     )
 
 

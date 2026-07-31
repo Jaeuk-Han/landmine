@@ -54,6 +54,9 @@ class AssumptionCandidate:
     access_operation: str | None = None
     api_binding: str | None = None
     path_anchor: str | None = None
+    clock_source: str | None = None
+    clock_unit: str | None = None
+    time_operation: str | None = None
 
 
 class AssumptionDetector(Protocol):

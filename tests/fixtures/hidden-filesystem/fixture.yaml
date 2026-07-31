@@ -11,6 +11,7 @@ expected:
     - python.required-response-field
     - python.arbitrary-set-selection
     - python.cwd-relative-file-access
+    - python.wall-clock-elapsed-time
   active:
     - builtin_open_relative
     - pathlib_direct_read

@@ -61,6 +61,12 @@ def result_dict(result: Result) -> dict[str, Any]:
                 del assumption["api_binding"]
             if assumption.get("path_anchor") is None:
                 del assumption["path_anchor"]
+            if assumption.get("clock_source") is None:
+                del assumption["clock_source"]
+            if assumption.get("clock_unit") is None:
+                del assumption["clock_unit"]
+            if assumption.get("time_operation") is None:
+                del assumption["time_operation"]
     return value
 
 
@@ -157,6 +163,17 @@ def render_markdown(result: Result) -> str:
                         and detail.api_binding is not None
                         else []
                     ),
+                    *(
+                        [
+                            f"- Clock source: `{detail.clock_source}`",
+                            f"- Clock unit: `{detail.clock_unit}`",
+                            f"- Time operation: `{detail.time_operation}`",
+                        ]
+                        if detail.clock_source is not None
+                        and detail.clock_unit is not None
+                        and detail.time_operation is not None
+                        else []
+                    ),
                     f"- Violation: {detail.violation_scenario}",
                     f"- Consequence: {detail.consequence}",
                     f"- Confidence ceiling: {detail.confidence_ceiling:.2f}",
@@ -168,7 +185,11 @@ def render_markdown(result: Result) -> str:
                             (
                                 "- Suggested explicit anchors: "
                                 if detail.detector_id == "python.cwd-relative-file-access"
-                                else "- Suggested deterministic alternatives: "
+                                else (
+                                    "- Suggested monotonic alternatives: "
+                                    if detail.detector_id == "python.wall-clock-elapsed-time"
+                                    else "- Suggested deterministic alternatives: "
+                                )
                             )
                             + ", ".join(
                                 f"`{alternative}`" for alternative in detail.suggested_alternatives
@@ -204,6 +225,11 @@ def render_markdown(result: Result) -> str:
                     "- Protection meaning: protected = working-directory-dependent "
                     "behavior is explicitly characterized; safety from arbitrary working "
                     "directories is not implied."
+                )
+            elif detail.detector_id == "python.wall-clock-elapsed-time":
+                lines.append(
+                    "- Protection meaning: protected = wall-clock adjustment behavior "
+                    "is explicitly characterized; safe production handling is not implied."
                 )
         lines.append("")
     if result.evolution:

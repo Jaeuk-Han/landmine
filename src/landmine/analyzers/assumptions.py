@@ -24,6 +24,9 @@ from landmine.detectors.python_required_mapping_key import PythonRequiredMapping
 from landmine.detectors.python_required_response_field import (
     PythonRequiredResponseFieldDetector,
 )
+from landmine.detectors.python_wall_clock_elapsed_time import (
+    PythonWallClockElapsedTimeDetector,
+)
 from landmine.domain import (
     AnalysisStatus,
     AssumptionAnalysis,
@@ -60,6 +63,7 @@ _DETECTORS: tuple[AssumptionDetector, ...] = (
     PythonRequiredResponseFieldDetector(),
     PythonArbitrarySetSelectionDetector(),
     PythonCwdRelativeFileAccessDetector(),
+    PythonWallClockElapsedTimeDetector(),
 )
 
 
@@ -199,6 +203,7 @@ def _discover_test_protection(
                     item.removed_environment_variables,
                     tuple((mock.library, mock.method, mock.fields) for mock in item.response_mocks),
                     not item.changed_working_directory,
+                    item.clock_adjustments,
                 ),
             )
         ),
@@ -450,6 +455,11 @@ def analyze_assumptions(
                     else {}
                 ),
                 **({"changed_working_directory": True} if match.changed_working_directory else {}),
+                **(
+                    {"clock_adjustments": list(match.clock_adjustments)}
+                    if match.clock_adjustments
+                    else {}
+                ),
                 **({"expects_key_error": True} if match.expects_key_error else {}),
                 **(
                     {"removed_environment_variables": list(match.removed_environment_variables)}
@@ -538,6 +548,17 @@ def analyze_assumptions(
                     and candidate.api_binding is not None
                     else {}
                 ),
+                **(
+                    {
+                        "clock_source": candidate.clock_source,
+                        "clock_unit": candidate.clock_unit,
+                        "time_operation": candidate.time_operation,
+                    }
+                    if candidate.clock_source is not None
+                    and candidate.clock_unit is not None
+                    and candidate.time_operation is not None
+                    else {}
+                ),
             },
             excerpt=line_excerpt,
             observed_at=observed_at,
@@ -577,6 +598,11 @@ def analyze_assumptions(
                         if candidate.path_literal is not None
                         else {}
                     ),
+                    **(
+                        {"clock_expression": observation.expression}
+                        if candidate.clock_source is not None
+                        else {}
+                    ),
                 },
                 excerpt=provenance_excerpt,
                 observed_at=observed_at,
@@ -591,6 +617,7 @@ def analyze_assumptions(
         response_protection = candidate.detector_id == "python.required-response-field"
         ordering_protection = candidate.detector_id == "python.arbitrary-set-selection"
         filesystem_protection = candidate.detector_id == "python.cwd-relative-file-access"
+        time_protection = candidate.detector_id == "python.wall-clock-elapsed-time"
         explicit_missing_key = any(
             item.mapping_keys is not None and candidate.required_key not in item.mapping_keys
             for item in related
@@ -628,10 +655,23 @@ def analyze_assumptions(
             for item in related
         )
         cwd_characterized = any(item.changed_working_directory for item in related)
+        matching_clock_adjustments = tuple(
+            sorted(
+                {
+                    adjustment
+                    for item in related
+                    for adjustment in item.clock_adjustments
+                    if candidate.clock_source is not None
+                    and adjustment.split(":", 1)[0] in candidate.clock_source
+                }
+            )
+        )
         if ordering_protection:
             explicit_edge_case = False
         elif filesystem_protection:
             explicit_edge_case = cwd_characterized
+        elif time_protection:
+            explicit_edge_case = bool(matching_clock_adjustments)
         elif response_protection:
             explicit_edge_case = explicit_missing_response_field
         elif environment_protection:
@@ -666,6 +706,20 @@ def analyze_assumptions(
                     + "The working-directory-dependent behavior is explicitly "
                     "characterized with monkeypatch.chdir(...); protection does not "
                     "establish safety from every working directory."
+                )
+            elif time_protection:
+                directions = ", ".join(
+                    adjustment.split(":", 1)[1] for adjustment in matching_clock_adjustments
+                )
+                uncertainty = (
+                    (
+                        candidate.uncertainty_note + " "
+                        if candidate.uncertainty_note is not None
+                        else ""
+                    )
+                    + f"Wall-clock {directions} adjustment behavior is explicitly "
+                    "characterized with a proven mock side-effect sequence; protection "
+                    "does not imply safe production handling."
                 )
             elif response_protection:
                 uncertainty = (
@@ -717,6 +771,16 @@ def analyze_assumptions(
                     + "Candidate tests were found, but no direct monkeypatch.chdir(...) "
                     "setup was proven."
                 )
+            elif related and time_protection:
+                uncertainty = (
+                    (
+                        candidate.uncertainty_note + " "
+                        if candidate.uncertainty_note is not None
+                        else ""
+                    )
+                    + "Candidate tests were found, but no proven backward or large "
+                    "forward wall-clock side-effect sequence was found."
+                )
             elif related and response_protection:
                 uncertainty = (
                     "Candidate tests were found, but no proven HTTP mock omitted "
@@ -743,7 +807,8 @@ def analyze_assumptions(
             protection = ProtectionStatus.UNPROTECTED
             uncertainty = (
                 candidate.uncertainty_note + " "
-                if filesystem_protection and candidate.uncertainty_note is not None
+                if (filesystem_protection or time_protection)
+                and candidate.uncertainty_note is not None
                 else ""
             ) + "No candidate test reference was found in the bounded test search."
         test_ids = [
@@ -756,8 +821,11 @@ def analyze_assumptions(
             f"{candidate.column}\0{candidate.observed_signal}\0{candidate.variable}\0"
             f"{candidate.required_key or ''}\0{candidate.selection_operation or ''}"
             f"\0{candidate.path_literal or ''}\0{candidate.access_operation or ''}"
+            f"\0{candidate.clock_source or ''}\0{candidate.time_operation or ''}"
         )
-        if filesystem_protection:
+        if time_protection:
+            title = "Wall-clock elapsed-time logic"
+        elif filesystem_protection:
             title = "CWD-relative file access"
         elif ordering_protection:
             title = "Arbitrary set element selection"
@@ -797,6 +865,7 @@ def analyze_assumptions(
                         if candidate.required_key is not None
                         or candidate.selection_operation is not None
                         or candidate.path_literal is not None
+                        or candidate.clock_source is not None
                         else None
                     ),
                     required_key=candidate.required_key,
@@ -808,6 +877,9 @@ def analyze_assumptions(
                     access_operation=candidate.access_operation,
                     api_binding=candidate.api_binding,
                     path_anchor=candidate.path_anchor,
+                    clock_source=candidate.clock_source,
+                    clock_unit=candidate.clock_unit,
+                    time_operation=candidate.time_operation,
                 ),
             )
         )
@@ -880,6 +952,12 @@ def analyze_assumptions(
                 f"Found {len(actual_findings)} supported CWD-relative file-access "
                 "signal(s) with python.cwd-relative-file-access; "
                 f"suppressed {len(suppressed)} explicitly anchored candidate(s)."
+            )
+        elif active_detector_ids == {"python.wall-clock-elapsed-time"}:
+            summary = (
+                f"Found {len(actual_findings)} supported wall-clock elapsed-time "
+                "signal(s) with python.wall-clock-elapsed-time; "
+                f"suppressed {len(suppressed)} safe-clock candidate(s)."
             )
         else:
             summary = (

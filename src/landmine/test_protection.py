@@ -25,6 +25,7 @@ class TestProtectionMatch:
     removed_environment_variables: tuple[str, ...] = ()
     response_mocks: tuple[ResponseMock, ...] = ()
     changed_working_directory: bool = False
+    clock_adjustments: tuple[str, ...] = ()
 
 
 def _called_name(node: ast.AST) -> str | None:
@@ -125,6 +126,8 @@ class _TestVisitor(ast.NodeVisitor):
         self.expects_key_error = False
         self.changed_working_directory = False
         self.monkeypatch_available = False
+        self.mocker_available = False
+        self.clock_adjustments: set[str] = set()
         self.matches: list[TestProtectionMatch] = []
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
@@ -135,6 +138,8 @@ class _TestVisitor(ast.NodeVisitor):
         previous_response_fields = self.response_mock_fields
         previous_changed_working_directory = self.changed_working_directory
         previous_monkeypatch_available = self.monkeypatch_available
+        previous_mocker_available = self.mocker_available
+        previous_clock_adjustments = self.clock_adjustments
         self.empty_names = set()
         self.mapping_names = {}
         self.removed_environment_variables = set()
@@ -149,6 +154,15 @@ class _TestVisitor(ast.NodeVisitor):
                 *node.args.kwonlyargs,
             )
         )
+        self.mocker_available = any(
+            argument.arg == "mocker"
+            for argument in (
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            )
+        )
+        self.clock_adjustments = set()
         for statement in node.body:
             self.visit(statement)
         self.empty_names = previous
@@ -158,6 +172,8 @@ class _TestVisitor(ast.NodeVisitor):
         self.response_mock_fields = previous_response_fields
         self.changed_working_directory = previous_changed_working_directory
         self.monkeypatch_available = previous_monkeypatch_available
+        self.mocker_available = previous_mocker_available
+        self.clock_adjustments = previous_clock_adjustments
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_function(node)
@@ -214,6 +230,39 @@ class _TestVisitor(ast.NodeVisitor):
         self.expects_key_error = previous
 
     def visit_Call(self, node: ast.Call) -> None:
+        if (
+            self.mocker_available
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "mocker"
+            and node.func.attr == "patch"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value in {"time.time", "time.time_ns"}
+        ):
+            side_effect = next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "side_effect"),
+                None,
+            )
+            if isinstance(side_effect, (ast.List, ast.Tuple)):
+                values = [
+                    element.value
+                    for element in side_effect.elts
+                    if isinstance(element, ast.Constant)
+                    and isinstance(element.value, (int, float))
+                    and not isinstance(element.value, bool)
+                ]
+                if len(values) == len(side_effect.elts) and len(values) >= 2:
+                    source = str(node.args[0].value)
+                    if any(
+                        after < before for before, after in zip(values, values[1:], strict=False)
+                    ):
+                        self.clock_adjustments.add(f"{source}:backward")
+                    if any(
+                        after - before >= max(1000.0, abs(float(before)) * 10)
+                        for before, after in zip(values, values[1:], strict=False)
+                    ):
+                        self.clock_adjustments.add(f"{source}:forward")
         if (
             self.monkeypatch_available
             and isinstance(node.func, ast.Attribute)
@@ -287,6 +336,7 @@ class _TestVisitor(ast.NodeVisitor):
                         )
                     ),
                     changed_working_directory=self.changed_working_directory,
+                    clock_adjustments=tuple(sorted(self.clock_adjustments)),
                 )
             )
         self.generic_visit(node)
@@ -315,6 +365,7 @@ def analyze_python_test_source(
                 item.removed_environment_variables,
                 tuple((mock.library, mock.method, mock.fields) for mock in item.response_mocks),
                 not item.changed_working_directory,
+                item.clock_adjustments,
             ),
         )
     )

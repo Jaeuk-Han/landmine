@@ -123,6 +123,7 @@ def test_default_category_runs_all_five_detectors(
         DETECTOR_ID,
         "python.arbitrary-set-selection",
         "python.cwd-relative-file-access",
+        "python.wall-clock-elapsed-time",
     )
 
 

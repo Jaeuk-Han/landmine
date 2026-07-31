@@ -12,7 +12,7 @@ from landmine.renderers import render_json, render_markdown, result_dict
 from tests.conftest import GitFixture, repository_digest
 
 FIXED_TIME = datetime(2026, 7, 31, 9, 0, tzinfo=UTC)
-DETECTOR_ID = "python.cwd-relative-file-access"
+DETECTOR_ID = "python.wall-clock-elapsed-time"
 
 
 def analyze(
@@ -23,14 +23,14 @@ def analyze(
 ):
     return analyze_assumptions(
         repo=fixture.root,
-        target=target or Target(path="src/config_loader.py"),
+        target=target or Target(path="src/timeout_logic.py"),
         category=category,
         clock=lambda: FIXED_TIME,
         monotonic=lambda: 100.0,
     )
 
 
-def filesystem_findings(result):
+def time_findings(result):
     return [
         item
         for item in result.findings
@@ -41,33 +41,45 @@ def filesystem_findings(result):
 def finding_for_scope(result, scope: str):
     return next(
         item
-        for item in filesystem_findings(result)
+        for item in time_findings(result)
         if item.assumption is not None and item.assumption.scope == scope
     )
 
 
-def test_chdir_test_can_characterize_cwd_behavior(
-    hidden_filesystem: GitFixture,
+def test_fixed_clock_mock_does_not_mark_jump_behavior_protected(
+    hidden_time: GitFixture,
 ) -> None:
-    finding = finding_for_scope(analyze(hidden_filesystem), "builtin_open_relative")
-    assert finding.assumption is not None
-    assert finding.assumption.protection is ProtectionStatus.PROTECTED
-    assert "working-directory-dependent behavior" in finding.assumption.uncertainty
-
-
-def test_related_test_without_chdir_is_not_protected(
-    hidden_filesystem: GitFixture,
-) -> None:
-    finding = finding_for_scope(analyze(hidden_filesystem), "pathlib_direct_read")
+    finding = finding_for_scope(analyze(hidden_time), "time_ns_duration")
     assert finding.assumption is not None
     assert finding.assumption.protection is ProtectionStatus.UNKNOWN
-    assert "monkeypatch.chdir" in finding.assumption.uncertainty
 
 
-def test_filesystem_finding_is_at_most_inferred(
-    hidden_filesystem: GitFixture,
+def test_backward_clock_mock_can_characterize_behavior(
+    hidden_time: GitFixture,
 ) -> None:
-    findings = filesystem_findings(analyze(hidden_filesystem))
+    finding = finding_for_scope(analyze(hidden_time), "returned_duration")
+    assert finding.assumption is not None
+    assert finding.assumption.protection is ProtectionStatus.PROTECTED
+    assert "backward" in finding.assumption.uncertainty
+
+
+def test_forward_clock_mock_can_characterize_behavior(
+    hidden_time: GitFixture,
+) -> None:
+    finding = finding_for_scope(analyze(hidden_time), "deadline_if")
+    assert finding.assumption is not None
+    assert finding.assumption.protection is ProtectionStatus.PROTECTED
+    assert "forward" in finding.assumption.uncertainty
+
+
+def test_unproven_mock_does_not_mark_protected(hidden_time: GitFixture) -> None:
+    finding = finding_for_scope(analyze(hidden_time), "imported_time_alias")
+    assert finding.assumption is not None
+    assert finding.assumption.protection is ProtectionStatus.UNKNOWN
+
+
+def test_time_finding_is_at_most_inferred(hidden_time: GitFixture) -> None:
+    findings = time_findings(analyze(hidden_time))
     assert findings
     assert all(item.status is ClaimStatus.INFERRED for item in findings)
     assert all(
@@ -77,10 +89,8 @@ def test_filesystem_finding_is_at_most_inferred(
     )
 
 
-def test_filesystem_category_runs_only_filesystem_detector(
-    hidden_filesystem: GitFixture,
-) -> None:
-    result = analyze(hidden_filesystem, category="filesystem")
+def test_time_category_runs_only_time_detector(hidden_time: GitFixture) -> None:
+    result = analyze(hidden_time, category="time")
     assert result.assumption_analysis is not None
     assert result.assumption_analysis.detectors_run == (DETECTOR_ID,)
     assert all(
@@ -89,10 +99,8 @@ def test_filesystem_category_runs_only_filesystem_detector(
     )
 
 
-def test_default_category_runs_all_seven_detectors(
-    hidden_filesystem: GitFixture,
-) -> None:
-    result = analyze(hidden_filesystem)
+def test_default_category_runs_all_seven_detectors(hidden_time: GitFixture) -> None:
+    result = analyze(hidden_time)
     assert result.assumption_analysis is not None
     assert result.assumption_analysis.detectors_run == (
         "python.non-empty-collection",
@@ -100,54 +108,48 @@ def test_default_category_runs_all_seven_detectors(
         "python.required-environment-variable",
         "python.required-response-field",
         "python.arbitrary-set-selection",
+        "python.cwd-relative-file-access",
         DETECTOR_ID,
-        "python.wall-clock-elapsed-time",
     )
 
 
-def test_filesystem_json_is_deterministic(hidden_filesystem: GitFixture) -> None:
-    assert render_json(analyze(hidden_filesystem)) == render_json(analyze(hidden_filesystem))
+def test_time_json_is_deterministic(hidden_time: GitFixture) -> None:
+    assert render_json(analyze(hidden_time)) == render_json(analyze(hidden_time))
 
 
-def test_filesystem_json_matches_v1_schema(hidden_filesystem: GitFixture) -> None:
+def test_time_json_matches_v1_schema(hidden_time: GitFixture) -> None:
     jsonschema = pytest.importorskip("jsonschema")
     schema_path = Path(__file__).parents[2] / "schemas" / "result-v1.schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator(
         schema,
         format_checker=jsonschema.FormatChecker(),
-    ).validate(result_dict(analyze(hidden_filesystem)))
+    ).validate(result_dict(analyze(hidden_time)))
 
 
-def test_filesystem_markdown_links_path_evidence(
-    hidden_filesystem: GitFixture,
-) -> None:
-    result = analyze(hidden_filesystem, Target(symbol="assigned_relative_path"))
-    finding = filesystem_findings(result)[0]
+def test_time_markdown_links_clock_provenance(hidden_time: GitFixture) -> None:
+    result = analyze(hidden_time, Target(symbol="time_duration"))
+    finding = time_findings(result)[0]
     markdown = render_markdown(result)
     assert all(item in markdown for item in finding.evidence_ids)
     assert any(
-        item.locator.get("provenance_role") == "path_construction"
+        item.locator.get("provenance_role") == "clock_call"
         for item in result.evidence
         if item.id in finding.evidence_ids
     )
-    assert "Suggested explicit anchors" in markdown
+    assert "Suggested monotonic alternatives" in markdown
 
 
-def test_filesystem_symbol_scope_is_respected(
-    hidden_filesystem: GitFixture,
-) -> None:
-    result = analyze(hidden_filesystem, Target(symbol="pathlib_module_alias"))
-    findings = filesystem_findings(result)
+def test_time_symbol_scope_is_respected(hidden_time: GitFixture) -> None:
+    result = analyze(hidden_time, Target(symbol="deadline_loop"))
+    findings = time_findings(result)
     assert len(findings) == 1
     assert findings[0].assumption is not None
-    assert findings[0].assumption.scope == "pathlib_module_alias"
+    assert findings[0].assumption.scope == "deadline_loop"
 
 
-def test_filesystem_detector_does_not_mutate_repository(
-    hidden_filesystem: GitFixture,
-) -> None:
-    before = repository_digest(hidden_filesystem.root)
-    analyze(hidden_filesystem)
-    after = repository_digest(hidden_filesystem.root)
+def test_time_detector_does_not_mutate_repository(hidden_time: GitFixture) -> None:
+    before = repository_digest(hidden_time.root)
+    analyze(hidden_time)
+    after = repository_digest(hidden_time.root)
     assert after == before
