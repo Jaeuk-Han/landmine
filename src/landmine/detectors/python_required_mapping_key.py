@@ -10,6 +10,9 @@ from landmine.detectors.python_required_environment_variable import (
     AccessIdentity,
     owned_environment_accesses,
 )
+from landmine.detectors.python_required_response_field import (
+    owned_response_field_accesses,
+)
 from landmine.domain import AssumptionCategory
 
 Guarantee = tuple[str, str]
@@ -125,7 +128,11 @@ class _ExpressionScanner(ast.NodeVisitor):
     def visit_Subscript(self, node: ast.Subscript) -> None:
         key = _literal_key(node.slice)
         if key is not None and isinstance(node.ctx, ast.Load):
-            if (node.lineno, node.col_offset, key) in self.analyzer.owned_environment:
+            identity = (node.lineno, node.col_offset, key)
+            if (
+                identity in self.analyzer.owned_environment
+                or identity in self.analyzer.owned_response_fields
+            ):
                 self.generic_visit(node)
                 return
             base = _normalize_base(node.value)
@@ -159,9 +166,11 @@ class _MappingAnalyzer:
         self,
         context: AnalysisContext,
         owned_environment: frozenset[AccessIdentity],
+        owned_response_fields: frozenset[AccessIdentity],
     ) -> None:
         self.context = context
         self.owned_environment = owned_environment
+        self.owned_response_fields = owned_response_fields
         self.candidates: dict[tuple[str, int, int, str, str], AssumptionCandidate] = {}
 
     def add_candidate(
@@ -382,7 +391,11 @@ class PythonRequiredMappingKeyDetector:
 
     def detect(self, context: AnalysisContext) -> list[AssumptionCandidate]:
         tree = ast.parse(context.source, filename=context.path)
-        analyzer = _MappingAnalyzer(context, owned_environment_accesses(context))
+        analyzer = _MappingAnalyzer(
+            context,
+            owned_environment_accesses(context),
+            owned_response_field_accesses(context),
+        )
         analyzer.scan_block(tree.body)
         return [
             analyzer.candidates[key]

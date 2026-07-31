@@ -459,6 +459,169 @@ def hidden_environment_variable(git_fixture: GitFixture) -> GitFixture:
     return git_fixture
 
 
+@pytest.fixture
+def hidden_external_contract(git_fixture: GitFixture) -> GitFixture:
+    git_fixture.commit(
+        "initial",
+        "Add external response consumers",
+        {
+            "src/client.py": (
+                "import requests\n"
+                "import requests as http\n"
+                "import httpx\n"
+                "import httpx as client\n"
+                "\n"
+                "\n"
+                "def requests_direct_json_access(url):\n"
+                "    response = requests.get(url)\n"
+                '    return response.json()["user_id"]\n'
+                "\n"
+                "\n"
+                "def requests_payload_assignment(url):\n"
+                "    response = requests.post(url)\n"
+                "    payload = response.json()\n"
+                '    return payload["status"]\n'
+                "\n"
+                "\n"
+                "def requests_alias(url):\n"
+                "    response = http.put(url)\n"
+                '    return response.json()["result"]\n'
+                "\n"
+                "\n"
+                "def httpx_direct(url):\n"
+                "    response = httpx.patch(url)\n"
+                '    return response.json()["version"]\n'
+                "\n"
+                "\n"
+                "def httpx_alias(url):\n"
+                '    response = client.request("GET", url)\n'
+                '    return response.json()["state"]\n'
+                "\n"
+                "\n"
+                "def nested_response_field(url):\n"
+                "    response = requests.get(url)\n"
+                "    payload = response.json()\n"
+                '    return payload["user"]["id"]\n'
+                "\n"
+                "\n"
+                "def membership_guarded(url):\n"
+                "    response = requests.get(url)\n"
+                "    payload = response.json()\n"
+                '    if "user_id" in payload:\n'
+                '        return payload["user_id"]\n'
+                "    return None\n"
+                "\n"
+                "\n"
+                "def early_return_guarded(url):\n"
+                "    response = requests.get(url)\n"
+                "    payload = response.json()\n"
+                '    if "user_id" not in payload:\n'
+                "        return None\n"
+                '    return payload["user_id"]\n'
+                "\n"
+                "\n"
+                "def early_raise_guarded(url):\n"
+                "    response = requests.get(url)\n"
+                "    payload = response.json()\n"
+                '    if "user_id" not in payload:\n'
+                '        raise RuntimeError("contract field required")\n'
+                '    return payload["user_id"]\n'
+                "\n"
+                "\n"
+                "def key_error_handled(url):\n"
+                "    response = requests.get(url)\n"
+                "    try:\n"
+                '        return response.json()["user_id"]\n'
+                "    except KeyError:\n"
+                "        return None\n"
+                "\n"
+                "\n"
+                "def raise_for_status_only(url):\n"
+                "    response = requests.get(url)\n"
+                "    response.raise_for_status()\n"
+                '    return response.json()["user_id"]\n'
+                "\n"
+                "\n"
+                "def status_code_guard_only(url):\n"
+                "    response = requests.get(url)\n"
+                "    if response.status_code == 200:\n"
+                '        return response.json()["user_id"]\n'
+                "    return None\n"
+                "\n"
+                "\n"
+                "def truthy_payload_guard(url):\n"
+                "    response = requests.get(url)\n"
+                "    payload = response.json()\n"
+                "    if payload:\n"
+                '        return payload["user_id"]\n'
+                "    return None\n"
+                "\n"
+                "\n"
+                "def payload_get_then_direct_access(url):\n"
+                "    response = requests.get(url)\n"
+                "    payload = response.json()\n"
+                '    payload.get("user_id")\n'
+                '    return payload["user_id"]\n'
+                "\n"
+                "\n"
+                "def local_service_response(local_service):\n"
+                "    response = local_service.get()\n"
+                '    return response.json()["user_id"]\n'
+                "\n"
+                "\n"
+                "def function_parameter_response(response):\n"
+                '    return response.json()["user_id"]\n'
+                "\n"
+                "\n"
+                "def rebound_requests_name(url, custom_client):\n"
+                "    requests = custom_client\n"
+                "    response = requests.get(url)\n"
+                '    return response.json()["user_id"]\n'
+                "\n"
+                "\n"
+                "def dynamic_field_key(url, key):\n"
+                "    response = requests.get(url)\n"
+                "    return response.json()[key]\n"
+            ),
+            "tests/test_client.py": (
+                "import pytest\n"
+                "\n"
+                "from client import (\n"
+                "    httpx_direct,\n"
+                "    requests_alias,\n"
+                "    requests_direct_json_access,\n"
+                "    requests_payload_assignment,\n"
+                ")\n"
+                "\n"
+                "\n"
+                "def test_present_response_field(mocker):\n"
+                '    mock_get = mocker.patch("requests.get")\n'
+                '    mock_get.return_value.json.return_value = {"user_id": "known"}\n'
+                '    requests_direct_json_access("https://example.invalid")\n'
+                "\n"
+                "\n"
+                "def test_missing_response_field(mocker):\n"
+                '    mock_post = mocker.patch("requests.post")\n'
+                "    mock_post.return_value.json.return_value = {}\n"
+                '    requests_payload_assignment("https://example.invalid")\n'
+                "\n"
+                "\n"
+                "def test_other_response_field_characterizes_key_error(mocker):\n"
+                '    mock_put = mocker.patch("requests.put")\n'
+                '    mock_put.return_value.json.return_value = {"other": 1}\n'
+                "    with pytest.raises(KeyError):\n"
+                '        requests_alias("https://example.invalid")\n'
+                "\n"
+                "\n"
+                "def test_unproven_similar_mock(mock_get):\n"
+                "    mock_get.return_value.json.return_value = {}\n"
+                '    httpx_direct("https://example.invalid")\n'
+            ),
+        },
+    )
+    return git_fixture
+
+
 def repository_digest(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(item for item in root.rglob("*") if item.is_file()):

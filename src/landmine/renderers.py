@@ -45,6 +45,10 @@ def result_dict(result: Result) -> dict[str, Any]:
                 del assumption["base_expression"]
             if assumption.get("required_key") is None:
                 del assumption["required_key"]
+            if assumption.get("http_library") is None:
+                del assumption["http_library"]
+            if assumption.get("http_method") is None:
+                del assumption["http_method"]
     return value
 
 
@@ -117,6 +121,14 @@ def render_markdown(result: Result) -> str:
                         if detail.required_key is not None
                         else []
                     ),
+                    *(
+                        [
+                            f"- HTTP library: `{detail.http_library}`",
+                            f"- HTTP method: `{detail.http_method}`",
+                        ]
+                        if detail.http_library is not None and detail.http_method is not None
+                        else []
+                    ),
                     f"- Violation: {detail.violation_scenario}",
                     f"- Consequence: {detail.consequence}",
                     f"- Confidence ceiling: {detail.confidence_ceiling:.2f}",
@@ -134,6 +146,12 @@ def render_markdown(result: Result) -> str:
                 lines.append(
                     "- Protection meaning: protected = missing-variable behavior is "
                     "explicitly tested; production exception handling is not implied."
+                )
+            elif detail.detector_id == "python.required-response-field":
+                lines.append(
+                    "- Protection meaning: protected = missing-field external response "
+                    "behavior is explicitly characterized; production schema-drift "
+                    "handling is not implied."
                 )
         lines.append("")
     if result.evolution:

@@ -120,6 +120,7 @@ def test_default_category_runs_all_detectors(
         "python.non-empty-collection",
         "python.required-mapping-key",
         DETECTOR_ID,
+        "python.required-response-field",
     )
 
 

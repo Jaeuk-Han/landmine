@@ -29,6 +29,7 @@ class Impact(StrEnum):
 class AssumptionCategory(StrEnum):
     DATA = "data"
     ENVIRONMENT = "environment"
+    EXTERNAL_CONTRACT = "external_contract"
 
 
 class ProtectionStatus(StrEnum):
@@ -86,6 +87,8 @@ class AssumptionDetail:
     scope: str | None = None
     base_expression: str | None = None
     required_key: str | None = None
+    http_library: str | None = None
+    http_method: str | None = None
 
 
 @dataclass(frozen=True)

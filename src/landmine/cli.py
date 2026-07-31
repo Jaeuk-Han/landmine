@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     assumptions.add_argument("target")
     assumptions.add_argument(
         "--category",
-        choices=("data", "environment"),
+        choices=("data", "environment", "external_contract"),
         default=None,
     )
     assumptions.add_argument("--min-confidence", type=_confidence, default=0.0)

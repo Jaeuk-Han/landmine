@@ -17,6 +17,15 @@ class AnalysisContext:
 
 
 @dataclass(frozen=True)
+class ProvenanceObservation:
+    role: str
+    line: int
+    end_line: int
+    column: int
+    expression: str
+
+
+@dataclass(frozen=True)
 class AssumptionCandidate:
     detector_id: str
     category: AssumptionCategory
@@ -35,6 +44,9 @@ class AssumptionCandidate:
     suppression_reason: str | None = None
     required_key: str | None = None
     limitation_reason: str | None = None
+    http_library: str | None = None
+    http_method: str | None = None
+    provenance: tuple[ProvenanceObservation, ...] = ()
 
 
 class AssumptionDetector(Protocol):

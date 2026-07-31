@@ -15,6 +15,9 @@ from landmine.detectors.python_required_environment_variable import (
     PythonRequiredEnvironmentVariableDetector,
 )
 from landmine.detectors.python_required_mapping_key import PythonRequiredMappingKeyDetector
+from landmine.detectors.python_required_response_field import (
+    PythonRequiredResponseFieldDetector,
+)
 from landmine.domain import (
     AnalysisStatus,
     AssumptionAnalysis,
@@ -48,6 +51,7 @@ _DETECTORS: tuple[AssumptionDetector, ...] = (
     PythonNonEmptyCollectionDetector(),
     PythonRequiredMappingKeyDetector(),
     PythonRequiredEnvironmentVariableDetector(),
+    PythonRequiredResponseFieldDetector(),
 )
 
 
@@ -185,6 +189,7 @@ def _discover_test_protection(
                     item.mapping_keys or (),
                     not item.expects_key_error,
                     item.removed_environment_variables,
+                    tuple((mock.library, mock.method, mock.fields) for mock in item.response_mocks),
                 ),
             )
         ),
@@ -441,6 +446,20 @@ def analyze_assumptions(
                     if match.removed_environment_variables
                     else {}
                 ),
+                **(
+                    {
+                        "response_mocks": [
+                            {
+                                "library": mock.library,
+                                "method": mock.method,
+                                "fields": list(mock.fields),
+                            }
+                            for mock in match.response_mocks
+                        ]
+                    }
+                    if match.response_mocks
+                    else {}
+                ),
             },
             excerpt=match.matching_text,
             observed_at=observed_at,
@@ -474,6 +493,15 @@ def analyze_assumptions(
                     {
                         "base_expression": candidate.variable,
                         "required_key": candidate.required_key,
+                        **(
+                            {
+                                "http_library": candidate.http_library,
+                                "http_method": candidate.http_method,
+                            }
+                            if candidate.http_library is not None
+                            and candidate.http_method is not None
+                            else {}
+                        ),
                     }
                     if candidate.required_key is not None
                     else {}
@@ -484,10 +512,35 @@ def analyze_assumptions(
             command=None,
         )
         evidence_by_id[source_item.id] = source_item
+        provenance_ids: list[str] = []
+        for observation in candidate.provenance:
+            provenance_excerpt = (
+                source_lines[observation.line - 1].strip()
+                if 0 < observation.line <= len(source_lines)
+                else ""
+            )
+            provenance_item = make_evidence(
+                kind="source",
+                locator={
+                    "path": candidate.path,
+                    "line": observation.line,
+                    "end_line": observation.end_line,
+                    "detector_id": candidate.detector_id,
+                    "provenance_role": observation.role,
+                    "http_library": candidate.http_library,
+                    "http_method": candidate.http_method,
+                },
+                excerpt=provenance_excerpt,
+                observed_at=observed_at,
+                command=None,
+            )
+            evidence_by_id[provenance_item.id] = provenance_item
+            provenance_ids.append(provenance_item.id)
         related = matches_by_scope.get(candidate.scope or "", [])
         candidate_tests = tuple(sorted({item.path for item in related}))
         environment_protection = candidate.detector_id == "python.required-environment-variable"
         mapping_protection = candidate.detector_id == "python.required-mapping-key"
+        response_protection = candidate.detector_id == "python.required-response-field"
         explicit_missing_key = any(
             item.mapping_keys is not None and candidate.required_key not in item.mapping_keys
             for item in related
@@ -505,7 +558,28 @@ def analyze_assumptions(
             candidate.required_key in item.removed_environment_variables and item.expects_key_error
             for item in related
         )
-        if environment_protection:
+        matching_response_mocks = [
+            mock
+            for item in related
+            for mock in item.response_mocks
+            if mock.library == candidate.http_library and mock.method == candidate.http_method
+        ]
+        explicit_missing_response_field = any(
+            candidate.required_key not in mock.fields for mock in matching_response_mocks
+        )
+        response_key_error_characterization = any(
+            item.expects_key_error
+            and any(
+                mock.library == candidate.http_library
+                and mock.method == candidate.http_method
+                and candidate.required_key not in mock.fields
+                for mock in item.response_mocks
+            )
+            for item in related
+        )
+        if response_protection:
+            explicit_edge_case = explicit_missing_response_field
+        elif environment_protection:
             explicit_edge_case = explicit_missing_environment
         elif mapping_protection:
             explicit_edge_case = explicit_missing_key
@@ -514,7 +588,18 @@ def analyze_assumptions(
         if explicit_edge_case:
             protection = ProtectionStatus.PROTECTED
             protected_count += 1
-            if environment_protection:
+            if response_protection:
+                uncertainty = (
+                    "The missing-field external response behavior is explicitly "
+                    "characterized with a proven HTTP mock; "
+                    + (
+                        "a KeyError characterization is present. "
+                        if response_key_error_characterization
+                        else ""
+                    )
+                    + "Protection does not imply that production code handles schema drift."
+                )
+            elif environment_protection:
                 uncertainty = (
                     "A missing-variable behavior is explicitly tested with "
                     "monkeypatch.delenv(..., raising=False); "
@@ -543,7 +628,12 @@ def analyze_assumptions(
         elif related or test_truncated or test_parse_failure or candidate.scope is None:
             protection = ProtectionStatus.UNKNOWN
             unknown_count += 1
-            if related and environment_protection:
+            if related and response_protection:
+                uncertainty = (
+                    "Candidate tests were found, but no proven HTTP mock omitted "
+                    "the required response field."
+                )
+            elif related and environment_protection:
                 uncertainty = (
                     "Candidate tests were found, but no explicit missing-variable setup "
                     "with monkeypatch.delenv(..., raising=False) was proven."
@@ -573,7 +663,9 @@ def analyze_assumptions(
             f"{candidate.column}\0{candidate.observed_signal}\0{candidate.variable}\0"
             f"{candidate.required_key or ''}"
         )
-        if environment_protection:
+        if response_protection:
+            title = "Unchecked required response field"
+        elif environment_protection:
             title = "Unchecked required environment variable"
         elif mapping_protection:
             title = "Unchecked required mapping key"
@@ -587,7 +679,7 @@ def analyze_assumptions(
                 claim=candidate.claim,
                 status=ClaimStatus.INFERRED,
                 confidence=min(candidate.confidence, candidate.confidence_ceiling),
-                evidence_ids=tuple(sorted({source_item.id, *test_ids})),
+                evidence_ids=tuple(sorted({source_item.id, *provenance_ids, *test_ids})),
                 impact=Impact.BEHAVIORAL,
                 tags=("assumption", candidate.category.value, candidate.detector_id),
                 assumption=AssumptionDetail(
@@ -605,6 +697,8 @@ def analyze_assumptions(
                         candidate.variable if candidate.required_key is not None else None
                     ),
                     required_key=candidate.required_key,
+                    http_library=candidate.http_library,
+                    http_method=candidate.http_method,
                 ),
             )
         )
@@ -664,6 +758,12 @@ def analyze_assumptions(
                 f"Found {len(actual_findings)} supported required environment-variable "
                 "signal(s) with python.required-environment-variable; "
                 f"suppressed {len(suppressed)} guarded or statically safe candidate(s)."
+            )
+        elif active_detector_ids == {"python.required-response-field"}:
+            summary = (
+                f"Found {len(actual_findings)} supported required response-field "
+                "signal(s) with python.required-response-field; "
+                f"suppressed {len(suppressed)} guarded or handled candidate(s)."
             )
         else:
             summary = (

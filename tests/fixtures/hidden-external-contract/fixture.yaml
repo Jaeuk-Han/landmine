@@ -1,0 +1,30 @@
+fixture_version: 1
+id: hidden-external-contract
+query:
+  command: assumptions
+  target: src/client.py
+expected:
+  detector_ids:
+    - python.non-empty-collection
+    - python.required-mapping-key
+    - python.required-environment-variable
+    - python.required-response-field
+  active:
+    - requests_direct_json_access
+    - requests_payload_assignment
+    - requests_alias
+    - httpx_direct
+    - httpx_alias
+    - nested_response_field
+    - raise_for_status_only
+    - status_code_guard_only
+    - truthy_payload_guard
+    - payload_get_then_direct_access
+  suppressed:
+    - membership_guarded
+    - early_return_guarded
+    - early_raise_guarded
+    - key_error_handled
+forbidden_claims:
+  - "A successful HTTP status guarantees the response schema"
+  - "Mock naming alone proves missing-field coverage"

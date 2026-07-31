@@ -8,6 +8,7 @@ expected:
     - python.non-empty-collection
     - python.required-mapping-key
     - python.required-environment-variable
+    - python.required-response-field
   active:
     - required_os_environ
     - required_aliased_os

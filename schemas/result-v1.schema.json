@@ -282,7 +282,9 @@
         "uncertainty": {"type": ["string", "null"]},
         "scope": {"type": ["string", "null"]},
         "base_expression": {"type": "string"},
-        "required_key": {"type": "string"}
+        "required_key": {"type": "string"},
+        "http_library": {"type": "string"},
+        "http_method": {"type": "string"}
       }
     },
     "assumptionAnalysis": {

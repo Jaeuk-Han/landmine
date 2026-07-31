@@ -7,6 +7,13 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class ResponseMock:
+    library: str
+    method: str
+    fields: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class TestProtectionMatch:
     path: str
     scope: str
@@ -16,6 +23,7 @@ class TestProtectionMatch:
     mapping_keys: tuple[str, ...] | None = None
     expects_key_error: bool = False
     removed_environment_variables: tuple[str, ...] = ()
+    response_mocks: tuple[ResponseMock, ...] = ()
 
 
 def _called_name(node: ast.AST) -> str | None:
@@ -66,6 +74,43 @@ def _is_pytest_raises_key_error(node: ast.AST) -> bool:
     )
 
 
+def _proven_patch_target(node: ast.AST) -> tuple[str, str] | None:
+    if (
+        not isinstance(node, ast.Call)
+        or not isinstance(node.func, ast.Attribute)
+        or node.func.attr != "patch"
+        or not isinstance(node.func.value, ast.Name)
+        or node.func.value.id != "mocker"
+        or not node.args
+        or not isinstance(node.args[0], ast.Constant)
+        or not isinstance(node.args[0].value, str)
+    ):
+        return None
+    parts = node.args[0].value.split(".")
+    if (
+        len(parts) == 2
+        and parts[0] in {"requests", "httpx"}
+        and parts[1] in {"get", "post", "put", "patch", "delete", "request"}
+    ):
+        return parts[0], parts[1]
+    return None
+
+
+def _mock_json_return_root(node: ast.AST) -> str | None:
+    attributes: list[str] = []
+    current = node
+    while isinstance(current, ast.Attribute):
+        attributes.append(current.attr)
+        current = current.value
+    if isinstance(current, ast.Name) and tuple(reversed(attributes)) == (
+        "return_value",
+        "json",
+        "return_value",
+    ):
+        return current.id
+    return None
+
+
 class _TestVisitor(ast.NodeVisitor):
     def __init__(self, path: str, source_lines: list[str], scopes: set[str]) -> None:
         self.path = path
@@ -74,6 +119,8 @@ class _TestVisitor(ast.NodeVisitor):
         self.empty_names: set[str] = set()
         self.mapping_names: dict[str, tuple[str, ...]] = {}
         self.removed_environment_variables: set[str] = set()
+        self.proven_http_mocks: dict[str, tuple[str, str]] = {}
+        self.response_mock_fields: dict[str, tuple[str, ...]] = {}
         self.expects_key_error = False
         self.matches: list[TestProtectionMatch] = []
 
@@ -81,14 +128,20 @@ class _TestVisitor(ast.NodeVisitor):
         previous = self.empty_names
         previous_mappings = self.mapping_names
         previous_removed_environment = self.removed_environment_variables
+        previous_http_mocks = self.proven_http_mocks
+        previous_response_fields = self.response_mock_fields
         self.empty_names = set()
         self.mapping_names = {}
         self.removed_environment_variables = set()
+        self.proven_http_mocks = {}
+        self.response_mock_fields = {}
         for statement in node.body:
             self.visit(statement)
         self.empty_names = previous
         self.mapping_names = previous_mappings
         self.removed_environment_variables = previous_removed_environment
+        self.proven_http_mocks = previous_http_mocks
+        self.response_mock_fields = previous_response_fields
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_function(node)
@@ -99,14 +152,27 @@ class _TestVisitor(ast.NodeVisitor):
     def visit_Assign(self, node: ast.Assign) -> None:
         self.visit(node.value)
         mapping_keys = _mapping_literal_keys(node.value)
+        patch_target = _proven_patch_target(node.value)
+        for target in node.targets:
+            mock_root = _mock_json_return_root(target)
+            if (
+                mock_root is not None
+                and mock_root in self.proven_http_mocks
+                and mapping_keys is not None
+            ):
+                self.response_mock_fields[mock_root] = mapping_keys
         for target in node.targets:
             if isinstance(target, ast.Name):
                 self.empty_names.discard(target.id)
                 self.mapping_names.pop(target.id, None)
+                self.proven_http_mocks.pop(target.id, None)
+                self.response_mock_fields.pop(target.id, None)
                 if _is_empty_expression(node.value):
                     self.empty_names.add(target.id)
                 if mapping_keys is not None:
                     self.mapping_names[target.id] = mapping_keys
+                if patch_target is not None:
+                    self.proven_http_mocks[target.id] = patch_target
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         if node.value is not None:
@@ -177,6 +243,24 @@ class _TestVisitor(ast.NodeVisitor):
                     mapping_keys=mapping_keys,
                     expects_key_error=self.expects_key_error,
                     removed_environment_variables=tuple(sorted(self.removed_environment_variables)),
+                    response_mocks=tuple(
+                        sorted(
+                            (
+                                ResponseMock(
+                                    library=library,
+                                    method=method,
+                                    fields=self.response_mock_fields[name],
+                                )
+                                for name, (library, method) in self.proven_http_mocks.items()
+                                if name in self.response_mock_fields
+                            ),
+                            key=lambda item: (
+                                item.library,
+                                item.method,
+                                item.fields,
+                            ),
+                        )
+                    ),
                 )
             )
         self.generic_visit(node)
@@ -203,6 +287,7 @@ def analyze_python_test_source(
                 item.mapping_keys or (),
                 not item.expects_key_error,
                 item.removed_environment_variables,
+                tuple((mock.library, mock.method, mock.fields) for mock in item.response_mocks),
             ),
         )
     )
