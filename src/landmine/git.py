@@ -50,6 +50,13 @@ class LineLogRecord:
     diff: str
 
 
+@dataclass(frozen=True)
+class RepositorySnapshot:
+    state: RepositoryState
+    runner: GitRunner
+    worktree_status: str = ""
+
+
 class GitRunner:
     """Run allowlisted Git queries with argument arrays and no shell."""
 

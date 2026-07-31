@@ -170,3 +170,39 @@ def score_blast(
         else "low"
     )
     return Risk(score=total, grade=grade, components=components)
+
+
+def score_defuse(prerequisites: tuple[tuple[str, Risk], ...]) -> Risk:
+    """Aggregate prerequisite risks without inventing a new prose-derived score."""
+    if not prerequisites:
+        return Risk(
+            score=0,
+            grade="low",
+            components={
+                name: ScoreComponent(0, weight, ("no_usable_prerequisite",))
+                for name, weight in _WEIGHTS.items()
+            },
+        )
+    score = max(risk.score for _, risk in prerequisites)
+    components: dict[str, ScoreComponent] = {}
+    for component_name, weight in _WEIGHTS.items():
+        source, component = max(
+            ((command, risk.components[component_name]) for command, risk in prerequisites),
+            key=lambda item: (item[1].value, item[0]),
+        )
+        components[component_name] = ScoreComponent(
+            value=component.value,
+            weight=weight,
+            signals=(f"source:{source}",)
+            + tuple(f"{source}:{signal}" for signal in component.signals),
+        )
+    grade = (
+        "critical"
+        if score >= 75
+        else "high"
+        if score >= 50
+        else "moderate"
+        if score >= 25
+        else "low"
+    )
+    return Risk(score=score, grade=grade, components=components)

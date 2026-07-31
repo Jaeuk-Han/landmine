@@ -1087,6 +1087,63 @@ def direct_blast(git_fixture: GitFixture) -> GitFixture:
     return git_fixture
 
 
+@pytest.fixture
+def defuse_plan(git_fixture: GitFixture) -> GitFixture:
+    git_fixture.commit(
+        "initial",
+        "Add route selection",
+        {
+            "src/landmine_fixture/__init__.py": "",
+            "src/landmine_fixture/routing.py": (
+                "def select_route(items, payload):\n"
+                "    first = items[0]\n"
+                '    status = payload["status"]\n'
+                "    return first, status\n"
+            ),
+        },
+    )
+    git_fixture.commit(
+        "regression_guard",
+        "Preserve fallback for disabled upstream routes",
+        {
+            "src/landmine_fixture/routing.py": (
+                "def select_route(items, payload):\n"
+                '    if payload.get("disabled"):\n'
+                '        return "fallback"\n'
+                "    first = items[0]\n"
+                '    status = payload["status"]\n'
+                "    return first, status\n"
+            ),
+            "src/landmine_fixture/app.py": (
+                "from landmine_fixture.routing import select_route\n"
+                "\n"
+                "\n"
+                "def run(items, payload):\n"
+                "    return select_route(items, payload)\n"
+            ),
+            "src/landmine_fixture/dynamic.py": (
+                "import importlib\n"
+                "\n"
+                "\n"
+                "def load_route():\n"
+                '    return importlib.import_module("landmine_fixture.routing")\n'
+            ),
+            "tests/test_routing.py": (
+                "from landmine_fixture.routing import select_route\n"
+                "\n"
+                "\n"
+                "def test_disabled_route_uses_fallback():\n"
+                '    assert select_route([1], {"disabled": True, "status": "ok"}) == "fallback"\n'
+            ),
+            "tests/test_candidate.py": (
+                "def test_select_route_candidate_name_only():\n    assert True\n"
+            ),
+            "pyproject.toml": ('[tool.pytest.ini_options]\ntestpaths = ["tests"]\n'),
+        },
+    )
+    return git_fixture
+
+
 def repository_digest(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(item for item in root.rglob("*") if item.is_file()):

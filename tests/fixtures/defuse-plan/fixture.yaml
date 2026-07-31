@@ -1,0 +1,23 @@
+fixture_version: 1
+id: defuse-plan
+query:
+  command: defuse
+  target: symbol:select_route
+  goal: support empty upstream results
+expected:
+  preconditions:
+    - historical_constraint
+  characterization_detectors:
+    - python.non-empty-collection
+    - python.required-mapping-key
+  direct_tests:
+    - tests/test_routing.py
+  candidate_tests:
+    - tests/test_candidate.py
+  limitations:
+    - dynamic_import
+  status: partial
+forbidden_claims:
+  - tests were executed
+  - changes were applied
+  - candidate tests directly cover the target

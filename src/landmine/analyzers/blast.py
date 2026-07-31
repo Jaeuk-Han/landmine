@@ -30,7 +30,7 @@ from landmine.domain import (
     Target,
 )
 from landmine.evidence import make_evidence
-from landmine.git import list_tracked_files, preflight
+from landmine.git import RepositorySnapshot, list_tracked_files, preflight
 from landmine.scoring import score_blast
 from landmine.source import (
     SymbolResolutionError,
@@ -601,11 +601,16 @@ def analyze_blast(
     depth: int = 1,
     clock: Clock = _utc_now,
     monotonic: Callable[[], float] = time.monotonic,
+    snapshot: RepositorySnapshot | None = None,
 ) -> Result:
     """Analyze proven Python direct imports and references without executing source."""
     started = monotonic()
     observed_at = _timestamp(clock)
-    repository, runner = preflight(repo, timeout=timeout)
+    repository, runner = (
+        (snapshot.state, snapshot.runner)
+        if snapshot is not None
+        else preflight(repo, timeout=timeout)
+    )
     root = runner.cwd.resolve()
     if target is None:
         return _error_result(

@@ -42,6 +42,7 @@
     },
     "assumption_analysis": {"$ref": "#/$defs/assumptionAnalysis"},
     "blast_analysis": {"$ref": "#/$defs/blastAnalysis"},
+    "defuse_analysis": {"$ref": "#/$defs/defuseAnalysis"},
     "impacts": {
       "type": "array",
       "items": {"$ref": "#/$defs/blastImpact"}
@@ -165,6 +166,8 @@
             ,"dynamic_import"
             ,"wildcard_import"
             ,"file_level_fallback"
+            ,"dirty_worktree"
+            ,"repository_state_changed"
           ]
         },
         "message": {"type": "string"},
@@ -176,11 +179,12 @@
       "additionalProperties": false,
       "required": ["preconditions", "tests", "steps", "verification", "rollback_triggers"],
       "properties": {
-        "preconditions": {"type": "array", "items": {"type": "string"}},
-        "tests": {"type": "array", "items": {"type": "string"}},
-        "steps": {"type": "array", "items": {"type": "string"}},
-        "verification": {"type": "array", "items": {"type": "string"}},
-        "rollback_triggers": {"type": "array", "items": {"type": "string"}}
+        "preconditions": {"type": "array", "items": {"$ref": "#/$defs/planItem"}},
+        "tests": {"type": "array", "items": {"$ref": "#/$defs/planItem"}},
+        "steps": {"type": "array", "items": {"$ref": "#/$defs/planItem"}},
+        "verification": {"type": "array", "items": {"$ref": "#/$defs/planItem"}},
+        "rollback_triggers": {"type": "array", "items": {"$ref": "#/$defs/planItem"}},
+        "unknowns": {"type": "array", "items": {"$ref": "#/$defs/planItem"}}
       }
     },
     "metrics": {
@@ -217,6 +221,8 @@
             "symbol_search_budget_exhausted"
             ,"target_required"
             ,"unsupported_depth"
+            ,"goal_required"
+            ,"unsupported_from_result"
           ]
         },
         "message": {"type": "string"},
@@ -390,6 +396,62 @@
         "candidate_test_count": {"type": "integer", "minimum": 0},
         "candidate_tests": {"type": "array", "items": {"type": "string"}},
         "not_evaluated": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "planItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "kind", "description", "status", "evidence_ids",
+        "related_finding_ids", "target_paths", "command_args"
+      ],
+      "properties": {
+        "id": {"type": "string", "pattern": "^plan_[0-9a-f]{12}$"},
+        "kind": {
+          "enum": [
+            "precondition", "test", "step", "verification",
+            "rollback_trigger", "unknown"
+          ]
+        },
+        "description": {"type": "string"},
+        "status": {"enum": ["proposed", "blocked", "not_evaluated"]},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "related_finding_ids": {"type": "array", "items": {"type": "string"}},
+        "target_paths": {"type": "array", "items": {"type": "string"}},
+        "command_args": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "prerequisiteSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command", "analysis_id", "status", "risk_score",
+        "finding_count", "evidence_count"
+      ],
+      "properties": {
+        "command": {"enum": ["why", "assumptions", "blast"]},
+        "analysis_id": {"type": "string", "pattern": "^lm_[0-9a-f]{12}$"},
+        "status": {"enum": ["complete", "partial", "failed"]},
+        "risk_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "finding_count": {"type": "integer", "minimum": 0},
+        "evidence_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "defuseAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prerequisites", "snapshot_head", "snapshot_dirty",
+        "repository_state_stable"
+      ],
+      "properties": {
+        "prerequisites": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/prerequisiteSummary"}
+        },
+        "snapshot_head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "snapshot_dirty": {"type": "boolean"},
+        "repository_state_stable": {"type": "boolean"}
       }
     }
   }

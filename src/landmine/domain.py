@@ -46,6 +46,12 @@ class BlastImpactStatus(StrEnum):
     INFERRED = "inferred"
 
 
+class PlanItemStatus(StrEnum):
+    PROPOSED = "proposed"
+    BLOCKED = "blocked"
+    NOT_EVALUATED = "not_evaluated"
+
+
 @dataclass(frozen=True)
 class Target:
     path: str | None = None
@@ -152,6 +158,24 @@ class BlastAnalysis:
 
 
 @dataclass(frozen=True)
+class PrerequisiteSummary:
+    command: str
+    analysis_id: str
+    status: AnalysisStatus
+    risk_score: int
+    finding_count: int
+    evidence_count: int
+
+
+@dataclass(frozen=True)
+class DefuseAnalysis:
+    prerequisites: tuple[PrerequisiteSummary, ...]
+    snapshot_head: str
+    snapshot_dirty: bool
+    repository_state_stable: bool
+
+
+@dataclass(frozen=True)
 class RepositoryState:
     root: str
     head: str
@@ -207,12 +231,25 @@ class Limitation:
 
 
 @dataclass(frozen=True)
+class PlanItem:
+    id: str
+    kind: str
+    description: str
+    status: PlanItemStatus
+    evidence_ids: tuple[str, ...] = ()
+    related_finding_ids: tuple[str, ...] = ()
+    target_paths: tuple[str, ...] = ()
+    command_args: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Plan:
-    preconditions: tuple[str, ...] = ()
-    tests: tuple[str, ...] = ()
-    steps: tuple[str, ...] = ()
-    verification: tuple[str, ...] = ()
-    rollback_triggers: tuple[str, ...] = ()
+    preconditions: tuple[PlanItem, ...] = ()
+    tests: tuple[PlanItem, ...] = ()
+    steps: tuple[PlanItem, ...] = ()
+    verification: tuple[PlanItem, ...] = ()
+    rollback_triggers: tuple[PlanItem, ...] = ()
+    unknowns: tuple[PlanItem, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -244,3 +281,4 @@ class Result:
     assumption_analysis: AssumptionAnalysis | None = None
     blast_analysis: BlastAnalysis | None = None
     impacts: tuple[BlastImpact, ...] = ()
+    defuse_analysis: DefuseAnalysis | None = None

@@ -44,7 +44,7 @@ from landmine.domain import (
     Target,
 )
 from landmine.evidence import make_evidence
-from landmine.git import list_tracked_files, preflight
+from landmine.git import RepositorySnapshot, list_tracked_files, preflight
 from landmine.scoring import score_assumptions
 from landmine.source import (
     SymbolResolutionError,
@@ -298,11 +298,16 @@ def analyze_assumptions(
     max_files: int = 1000,
     clock: Clock = _utc_now,
     monotonic: Callable[[], float] = time.monotonic,
+    snapshot: RepositorySnapshot | None = None,
 ) -> Result:
     """Analyze one Python target with the selected registered detectors."""
     detectors = _selected_detectors(category)
     started = monotonic()
-    repository, runner = preflight(repo, timeout=timeout)
+    repository, runner = (
+        (snapshot.state, snapshot.runner)
+        if snapshot is not None
+        else preflight(repo, timeout=timeout)
+    )
     root = runner.cwd
     observed_at = _timestamp(clock)
     tracked_paths = list_tracked_files(runner)

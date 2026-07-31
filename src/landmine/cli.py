@@ -10,6 +10,7 @@ from pathlib import Path
 from landmine import __version__
 from landmine.analyzers.assumptions import analyze_assumptions
 from landmine.analyzers.blast import analyze_blast
+from landmine.analyzers.defuse import analyze_defuse
 from landmine.analyzers.why import analyze_why
 from landmine.git import GitError, GitTimeout
 from landmine.renderers import render_json, render_markdown
@@ -88,8 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_shared_options(blast)
 
     defuse = subparsers.add_parser("defuse", help="build a safe change plan (Phase 4)")
-    defuse.add_argument("target")
-    defuse.add_argument("--goal", required=True)
+    defuse.add_argument("target", nargs="?")
+    defuse.add_argument("--goal")
+    defuse.add_argument("--from-result", type=Path)
     _add_shared_options(defuse)
     return parser
 
@@ -97,11 +99,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "defuse":
-        parser.error(f"{args.command} is visible in the CLI but is not implemented")
     try:
         target = parse_target(args.target) if args.target is not None else None
-        if args.command == "blast":
+        if args.command == "defuse":
+            result = analyze_defuse(
+                repo=args.repo,
+                target=target,
+                goal=args.goal,
+                from_result=args.from_result,
+                timeout=args.timeout,
+                max_files=args.max_files,
+                history_depth=args.max_commits,
+            )
+        elif args.command == "blast":
             result = analyze_blast(
                 repo=args.repo,
                 change=args.change,

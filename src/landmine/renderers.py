@@ -7,7 +7,7 @@ import json
 from enum import Enum
 from typing import Any
 
-from landmine.domain import Result
+from landmine.domain import PlanItem, Result
 
 
 def _primitive(value: Any) -> Any:
@@ -38,8 +38,12 @@ def result_dict(result: Result) -> dict[str, Any]:
         del value["assumption_analysis"]
     if value.get("blast_analysis") is None:
         del value["blast_analysis"]
+    if value.get("defuse_analysis") is None:
+        del value["defuse_analysis"]
     if result.command != "blast":
         del value["impacts"]
+    if result.command != "defuse":
+        value["plan"].pop("unknowns", None)
     for finding in value.get("findings", []):
         if finding.get("assumption") is None:
             del finding["assumption"]
@@ -104,6 +108,8 @@ def render_markdown(result: Result) -> str:
         return "\n".join(lines)
     if result.command == "blast":
         return _render_blast_markdown(result)
+    if result.command == "defuse":
+        return _render_defuse_markdown(result)
     lines = [
         f"# Landmine: {result.command}",
         "",
@@ -373,6 +379,82 @@ def _render_blast_markdown(result: Result) -> str:
             f"- Shallow repository: {str(result.repository.shallow).lower()}",
             f"- Files scanned: {result.metrics.files_scanned}",
             f"- Evidence count: {result.metrics.evidence_count}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_plan_items(lines: list[str], items: tuple[PlanItem, ...], *, empty: str) -> None:
+    if not items:
+        lines.extend([f"- {empty}", ""])
+        return
+    for item in items:
+        lines.append(f"- `{item.id}` [{item.status.value}] {item.description}")
+        if item.command_args:
+            lines.append(
+                "  - Proposed argument array: `"
+                + json.dumps(list(item.command_args), ensure_ascii=False)
+                + "`"
+            )
+        if item.evidence_ids:
+            lines.append(f"  - Evidence: {', '.join(item.evidence_ids)}")
+        if item.target_paths:
+            lines.append(f"  - Target paths: {', '.join(item.target_paths)}")
+    lines.append("")
+
+
+def _render_defuse_markdown(result: Result) -> str:
+    analysis = result.defuse_analysis
+    if analysis is None:
+        raise ValueError("successful defuse result requires defuse_analysis")
+    target = result.request.get("target") or {}
+    lines = [
+        "# Landmine: defuse",
+        "",
+        "## Summary",
+        "",
+        result.summary,
+        "",
+        "## Overall risk",
+        "",
+        f"- Score: {result.risk.score}/100 ({result.risk.grade})",
+        "- Aggregation: maximum prerequisite risk; component signals identify their source.",
+        "",
+        "## Target and goal",
+        "",
+        f"- Target: `{target}`",
+        f"- Goal (untrusted data): {result.request.get('goal')!r}",
+        "",
+        "## Preconditions",
+        "",
+    ]
+    _render_plan_items(lines, result.plan.preconditions, empty="No preconditions proposed.")
+    lines.extend(["## Characterization tests", ""])
+    _render_plan_items(lines, result.plan.tests, empty="No test specifications proposed.")
+    lines.extend(["## Safe modification steps", ""])
+    _render_plan_items(lines, result.plan.steps, empty="No modification steps proposed.")
+    lines.extend(["## Proposed verification", ""])
+    _render_plan_items(lines, result.plan.verification, empty="No verification proposed.")
+    lines.extend(["## Rollback triggers", ""])
+    _render_plan_items(lines, result.plan.rollback_triggers, empty="No rollback triggers proposed.")
+    lines.extend(["## Unknowns and limitations", ""])
+    _render_plan_items(lines, result.plan.unknowns, empty="No unknown plan items recorded.")
+    for limitation in result.limitations:
+        lines.append(f"- `{limitation.code}`: {limitation.message}")
+    if result.limitations:
+        lines.append("")
+    lines.extend(
+        [
+            "## Analysis metadata",
+            "",
+            f"- Status: {result.analysis_status.value}",
+            f"- Snapshot HEAD: `{analysis.snapshot_head}`",
+            f"- Snapshot dirty: {str(analysis.snapshot_dirty).lower()}",
+            f"- Repository state stable: {str(analysis.repository_state_stable).lower()}",
+            "- Prerequisites: "
+            + ", ".join(f"{item.command}={item.status.value}" for item in analysis.prerequisites),
+            "- No plan item was executed by Landmine.",
             "",
         ]
     )

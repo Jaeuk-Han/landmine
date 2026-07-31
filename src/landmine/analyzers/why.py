@@ -25,6 +25,7 @@ from landmine.git import (
     GitRunner,
     GitTimeout,
     LineLogRecord,
+    RepositorySnapshot,
     line_log,
     list_tracked_files,
     parse_line_log,
@@ -78,10 +79,15 @@ def analyze_why(
     max_files: int = 1000,
     clock: Clock = _utc_now,
     monotonic: Callable[[], float] = time.monotonic,
+    snapshot: RepositorySnapshot | None = None,
 ) -> Result:
     """Analyze a target using bounded blame, show, and follow-history evidence."""
     started = monotonic()
-    repository, runner = preflight(repo, timeout=timeout)
+    repository, runner = (
+        (snapshot.state, snapshot.runner)
+        if snapshot is not None
+        else preflight(repo, timeout=timeout)
+    )
     root = runner.cwd
     observed_at = _timestamp(clock)
     try:
