@@ -224,7 +224,11 @@ def parse_line_log(output: str) -> tuple[LineLogRecord, ...]:
         if not separator or len(fields) != 3:
             continue
         commit, timestamp, subject = fields
-        if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
+        if (
+            len(commit) != 40
+            or commit == "0" * 40
+            or any(character not in "0123456789abcdef" for character in commit)
+        ):
             continue
         records.append(
             LineLogRecord(

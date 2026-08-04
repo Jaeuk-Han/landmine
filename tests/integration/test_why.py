@@ -135,3 +135,26 @@ def test_why_handles_unicode_path(git_fixture: GitFixture) -> None:
     result = analyze(git_fixture, Target(path="src/경로.py", start_line=1, end_line=2))
     assert result.request["target"]["path"] == "src/경로.py"
     assert result.analysis_status is AnalysisStatus.COMPLETE
+
+
+def test_dirty_worktree_history_is_explicitly_based_on_head(git_fixture: GitFixture) -> None:
+    git_fixture.commit(
+        "initial",
+        "Add parser",
+        {"src/parser.py": "def parse(value):\n    return value\n"},
+    )
+    path = git_fixture.root / "src/parser.py"
+    path.write_text("def parse(value):\n    return value.strip()\n", encoding="utf-8")
+
+    result = analyze(git_fixture, Target(path="src/parser.py", start_line=1, end_line=2))
+
+    assert result.analysis_status is AnalysisStatus.PARTIAL
+    limitation = next(
+        item for item in result.limitations if item.code == "dirty_worktree_head_history"
+    )
+    assert "based on HEAD" in limitation.message
+    assert all(
+        item.locator.get("commit") != "0" * 40
+        for item in result.evidence
+        if "commit" in item.locator
+    )

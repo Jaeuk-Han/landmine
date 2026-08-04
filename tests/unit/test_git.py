@@ -9,6 +9,7 @@ from landmine.git import (
     GitError,
     GitRunner,
     line_log,
+    parse_line_log,
 )
 
 
@@ -81,3 +82,9 @@ def test_non_diff_commands_do_not_receive_diff_machinery_options(
         GitRunner(tmp_path).run([subcommand])
     command = run.call_args.args[0]
     assert all(option not in command for option in DIFF_MACHINERY_SAFETY_OPTIONS)
+
+
+def test_parse_line_log_ignores_zero_oid_record() -> None:
+    output = "\x1e" + "0" * 40 + "\x1f2026-08-04T00:00:00Z\x1fplaceholder\npatch"
+
+    assert parse_line_log(output) == ()

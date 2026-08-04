@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import time
 from collections.abc import Callable
@@ -22,6 +23,7 @@ from landmine.domain import (
 )
 from landmine.evidence import make_evidence, safe_excerpt
 from landmine.git import (
+    GitError,
     GitRunner,
     GitTimeout,
     LineLogRecord,
@@ -40,6 +42,7 @@ from landmine.source import (
 )
 
 Clock = Callable[[], datetime]
+ZERO_OID = "0" * 40
 
 
 def _utc_now() -> datetime:
@@ -50,16 +53,36 @@ def _timestamp(clock: Clock) -> str:
     return clock().astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _blamed_commits(output: str) -> tuple[str, ...]:
-    commits: set[str] = set()
+def _is_commit_oid(value: str) -> bool:
+    return (
+        len(value) == 40
+        and value != ZERO_OID
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _blame_commit_sets(output: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    attributed: set[str] = set()
+    previous: set[str] = set()
     for line in output.splitlines():
-        token = line.split(" ", 1)[0].lstrip("^")
-        if len(token) == 40 and all(character in "0123456789abcdef" for character in token):
-            commits.add(token)
-    return tuple(sorted(commits))
+        fields = line.split()
+        if len(fields) >= 3:
+            token = fields[0].lstrip("^")
+            if fields[1].isdigit() and fields[2].isdigit() and _is_commit_oid(token):
+                attributed.add(token)
+        if len(fields) >= 2 and fields[0] == "previous" and _is_commit_oid(fields[1]):
+            previous.add(fields[1])
+    return tuple(sorted(attributed)), tuple(sorted(previous))
+
+
+def _blamed_commits(output: str) -> tuple[str, ...]:
+    attributed, previous = _blame_commit_sets(output)
+    return attributed or previous
 
 
 def _commit_summary_and_paths(runner: GitRunner, commit: str) -> tuple[str, tuple[str, ...]]:
+    if not _is_commit_oid(commit):
+        raise GitError("Refusing to inspect a non-commit blame placeholder")
     output = runner.run(
         ["show", "--format=%H%x00%s", "--name-only", "--find-renames", commit]
     ).stdout
@@ -68,6 +91,43 @@ def _commit_summary_and_paths(runner: GitRunner, commit: str) -> tuple[str, tupl
     _, _, summary = header.partition("\x00")
     paths = tuple(sorted({line.strip().replace("\\", "/") for line in lines[1:] if line.strip()}))
     return summary, paths
+
+
+def _head_symbol_range(runner: GitRunner, target: Target) -> Target:
+    if (
+        target.symbol is None
+        or target.path is None
+        or not target.path.endswith(".py")
+        or target.start_line is None
+        or target.end_line != target.start_line
+    ):
+        return target
+    source = runner.run(["show", f"HEAD:{target.path}"], check=False)
+    if source.returncode != 0 or source.truncated:
+        return target
+    try:
+        tree = ast.parse(source.stdout)
+    except SyntaxError:
+        return target
+    matches = tuple(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+        and node.name == target.symbol
+        and node.end_lineno is not None
+    )
+    selected = next(
+        (node for node in matches if node.lineno == target.start_line),
+        matches[0] if len(matches) == 1 else None,
+    )
+    if selected is None:
+        return target
+    return Target(
+        path=target.path,
+        start_line=selected.lineno,
+        end_line=selected.end_lineno,
+        symbol=target.symbol,
+    )
 
 
 def analyze_why(
@@ -101,6 +161,7 @@ def analyze_why(
                 monotonic=monotonic,
             )
         resolved = resolve_line_range(resolve_path_target(target, root), root)
+        resolved = _head_symbol_range(runner, resolved)
     except SymbolResolutionError as exc:
         limitations = [
             Limitation(
@@ -168,11 +229,25 @@ def analyze_why(
         "--line-porcelain",
         "-L",
         f"{resolved.start_line},{resolved.end_line}",
+        "HEAD",
         "--",
         resolved.path,
     ]
     blame = runner.run(blame_args)
-    commits = _blamed_commits(blame.stdout)
+    attributed_commits, previous_commits = _blame_commit_sets(blame.stdout)
+    commits = attributed_commits or previous_commits
+    blame_fallback_limitation = (
+        Limitation(
+            code="provider_failure",
+            message=(
+                "git blame returned only uncommitted placeholders; valid previous-commit "
+                "metadata and line evolution were used as fallback."
+            ),
+            affected=(resolved.path,),
+        )
+        if not attributed_commits and previous_commits
+        else None
+    )
     evidence_by_id = {}
     blame_evidence = make_evidence(
         kind="git_blame",
@@ -184,7 +259,7 @@ def analyze_why(
         },
         excerpt="\n".join(line[1:] for line in blame.stdout.splitlines() if line.startswith("\t")),
         observed_at=observed_at,
-        command="git blame --line-porcelain -L <range> -- <path>",
+        command="git blame --line-porcelain -L <range> HEAD -- <path>",
     )
     evidence_by_id[blame_evidence.id] = blame_evidence
 
@@ -221,7 +296,7 @@ def analyze_why(
                     ),
                     affected=(resolved.path,),
                 )
-            elif not set(commits).issubset({record.commit for record in line_records}):
+            elif not set(attributed_commits).issubset({record.commit for record in line_records}):
                 line_records = ()
                 line_history_limitation = Limitation(
                     code="provider_failure",
@@ -263,7 +338,13 @@ def analyze_why(
     tests_by_commit: dict[str, list[str]] = {}
     related_test_ids: list[str] = []
     related_test_paths: set[str] = set()
-    commits_to_inspect = tuple(sorted({*commits, *(record.commit for record in line_records)}))
+    commits_to_inspect = tuple(
+        sorted(
+            commit
+            for commit in {*commits, *(record.commit for record in line_records)}
+            if _is_commit_oid(commit)
+        )
+    )
     for record in line_records:
         diff_item = make_evidence(
             kind="git_diff",
@@ -456,6 +537,19 @@ def analyze_why(
     ]
     if line_history_limitation is not None:
         limitations.append(line_history_limitation)
+    if blame_fallback_limitation is not None:
+        limitations.append(blame_fallback_limitation)
+    if repository.dirty:
+        limitations.append(
+            Limitation(
+                code="dirty_worktree_head_history",
+                message=(
+                    "Historical attribution is based on HEAD; uncommitted worktree content "
+                    "was not represented as a historical commit."
+                ),
+                affected=(resolved.path,),
+            )
+        )
     if repository.shallow:
         limitations.append(
             Limitation(
@@ -476,9 +570,11 @@ def analyze_why(
         AnalysisStatus.PARTIAL
         if (
             repository.shallow
+            or repository.dirty
             or blame.truncated
             or log.truncated
             or line_history_limitation is not None
+            or blame_fallback_limitation is not None
         )
         else AnalysisStatus.COMPLETE
     )
