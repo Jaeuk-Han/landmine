@@ -67,6 +67,8 @@ class _Reference:
     line: int
     column: int
     excerpt: str
+    binding_line: int | None = None
+    binding_name: str | None = None
 
 
 def _utc_now() -> datetime:
@@ -362,10 +364,10 @@ def _reference_bindings(
                                 alias.name,
                             )
                         )
-                elif target_symbol is None and module == parent and alias.name == child:
+                elif module == parent and alias.name == child:
                     bindings.append(
                         _ImportBinding(
-                            "module",
+                            "module" if target_symbol is None else "module_symbol",
                             alias.asname or alias.name,
                             node.lineno,
                             target_module,
@@ -481,9 +483,11 @@ def _find_references(
                             node.lineno,
                             node.col_offset,
                             _source_line(source, node.lineno),
+                            binding.line,
+                            binding.local_name,
                         )
                     )
-            elif binding.kind == "module" and isinstance(node, ast.Attribute):
+            elif binding.kind in {"module", "module_symbol"} and isinstance(node, ast.Attribute):
                 if dotted_name(node.value) != binding.local_name:
                     continue
                 root_name = binding.local_name.split(".")[0]
@@ -502,6 +506,8 @@ def _find_references(
                         node.lineno,
                         node.col_offset,
                         _source_line(source, node.lineno),
+                        binding.line,
+                        binding.local_name,
                     )
                 )
     return tuple(
@@ -856,6 +862,17 @@ def analyze_blast(
                 )
             )
         references = _find_references(tree, candidate_source, bindings, subject.symbol)
+        proven_module_symbol_bindings = {
+            (reference.binding_line, reference.binding_name)
+            for reference in references
+            if reference.binding_line is not None and reference.binding_name is not None
+        }
+        bindings = tuple(
+            binding
+            for binding in bindings
+            if binding.kind != "module_symbol"
+            or (binding.line, binding.local_name) in proven_module_symbol_bindings
+        )
         if not bindings:
             if _candidate_test(path, candidate_source, subject):
                 candidate_tests.add(path)
