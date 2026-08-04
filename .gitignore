@@ -26,6 +26,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .test-tmp/
+/dist/
+/build/
+/.release-venv/
+/.uv-release-cache/
 
 # Editors and OS
 .vscode/

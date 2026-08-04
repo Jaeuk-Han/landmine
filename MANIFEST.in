@@ -1,0 +1,10 @@
+include CHANGELOG.md
+include LICENSE
+include README.md
+include SECURITY.md
+include schemas/result-v1.schema.json
+recursive-exclude * __pycache__ *.py[cod]
+prune .test-tmp
+prune .release-venv
+prune build
+prune dist

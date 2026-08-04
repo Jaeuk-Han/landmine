@@ -4,7 +4,12 @@ from unittest.mock import patch
 
 import pytest
 
-from landmine.git import GitError, GitRunner, line_log
+from landmine.git import (
+    DIFF_MACHINERY_SAFETY_OPTIONS,
+    GitError,
+    GitRunner,
+    line_log,
+)
 
 
 def test_git_runner_uses_argument_array(tmp_path: Path) -> None:
@@ -46,6 +51,33 @@ def test_log_l_uses_argument_array(tmp_path: Path) -> None:
         )
     command = run.call_args.args[0]
     assert isinstance(command, list)
+    log_index = command.index("log")
+    assert command[log_index + 1 : log_index + 3] == list(DIFF_MACHINERY_SAFETY_OPTIONS)
     assert "-L" in command
     assert "5,6:src/routing.py" in command
     assert run.call_args.kwargs["shell"] is False
+
+
+@pytest.mark.parametrize("subcommand", ["log", "show", "diff"])
+def test_diff_machinery_commands_disable_textconv_and_external_diff(
+    tmp_path: Path, subcommand: str
+) -> None:
+    completed = CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+    with patch("landmine.git.subprocess.run", return_value=completed) as run:
+        GitRunner(tmp_path).run([subcommand, "HEAD"])
+    command = run.call_args.args[0]
+    subcommand_index = command.index(subcommand)
+    assert command[subcommand_index + 1 : subcommand_index + 3] == list(
+        DIFF_MACHINERY_SAFETY_OPTIONS
+    )
+
+
+@pytest.mark.parametrize("subcommand", ["rev-parse", "status", "ls-files"])
+def test_non_diff_commands_do_not_receive_diff_machinery_options(
+    tmp_path: Path, subcommand: str
+) -> None:
+    completed = CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+    with patch("landmine.git.subprocess.run", return_value=completed) as run:
+        GitRunner(tmp_path).run([subcommand])
+    command = run.call_args.args[0]
+    assert all(option not in command for option in DIFF_MACHINERY_SAFETY_OPTIONS)

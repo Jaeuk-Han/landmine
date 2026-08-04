@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from landmine.domain import RepositoryState
+from landmine.evidence import safe_excerpt
 
 SAFE_GIT_COMMANDS = frozenset(
     {
@@ -24,6 +25,8 @@ SAFE_GIT_COMMANDS = frozenset(
         "merge-base",
     }
 )
+DIFF_MACHINERY_COMMANDS = frozenset({"diff", "log", "show"})
+DIFF_MACHINERY_SAFETY_OPTIONS = ("--no-textconv", "--no-ext-diff")
 
 
 class GitError(RuntimeError):
@@ -76,6 +79,11 @@ class GitRunner:
     def run(self, arguments: Sequence[str], *, check: bool = True) -> GitOutput:
         if not arguments or arguments[0] not in SAFE_GIT_COMMANDS:
             raise GitError("Git command is not on the read-only allowlist")
+        safe_arguments = (
+            [arguments[0], *DIFF_MACHINERY_SAFETY_OPTIONS, *arguments[1:]]
+            if arguments[0] in DIFF_MACHINERY_COMMANDS
+            else list(arguments)
+        )
         command = [
             self.executable,
             "--no-pager",
@@ -83,11 +91,29 @@ class GitRunner:
             "core.pager=cat",
             "-c",
             "color.ui=false",
-            *arguments,
+            "-c",
+            "core.fsmonitor=false",
+            *safe_arguments,
         ]
         environment = os.environ.copy()
+        for name in (
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_COMMON_DIR",
+            "GIT_CONFIG",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_DIR",
+            "GIT_EXTERNAL_DIFF",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_WORK_TREE",
+        ):
+            environment.pop(name, None)
         environment.update(
             {
+                "GIT_ATTR_NOSYSTEM": "1",
+                "GIT_CONFIG_NOSYSTEM": "1",
                 "GIT_OPTIONAL_LOCKS": "0",
                 "GIT_PAGER": "cat",
                 "GIT_TERMINAL_PROMPT": "0",
@@ -125,7 +151,11 @@ class GitRunner:
         )
         if check and result.returncode != 0:
             diagnostic = result.stderr.strip().splitlines()[:1]
-            detail = diagnostic[0] if diagnostic else "no diagnostic"
+            detail = (
+                safe_excerpt(diagnostic[0], max_lines=1, max_chars=500)
+                if diagnostic
+                else "no diagnostic"
+            )
             raise GitError(f"Git {arguments[0]} failed ({result.returncode}): {detail}")
         return result
 

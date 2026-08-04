@@ -31,8 +31,11 @@ Out of scope for MVP:
 - use argument arrays and `shell=False`
 - pass `--` before user-derived pathspecs
 - set `GIT_OPTIONAL_LOCKS=0`, `GIT_PAGER=cat`, `LC_ALL=C`
-- use `git -c core.pager=cat -c color.ui=false`
+- use `git -c core.pager=cat -c color.ui=false -c core.fsmonitor=false`
+- remove inherited Git repository/config redirection and external-diff environment variables
+- set `GIT_CONFIG_NOSYSTEM=1` and `GIT_ATTR_NOSYSTEM=1`
 - do not execute Git aliases or repository scripts
+- do not request external diff or textconv processing
 - enforce timeout and output-size caps
 
 ### Filesystem
@@ -52,7 +55,7 @@ Out of scope for MVP:
 
 ### Secret redaction
 
-Redact patterns for common tokens, private keys, authorization headers, connection strings, and high-entropy values. Prefer locators and hashes over full excerpts. Never print the full environment or Git config.
+Redact patterns for common tokens, private keys, authorization headers, and credential-bearing common connection strings. Prefer locators and hashes over full excerpts. Never print the full environment or Git config. Arbitrary high-entropy-string detection is not implemented because it would over-redact ordinary source; this remains an alpha limitation.
 
 ### Git safety
 
@@ -60,7 +63,7 @@ Only allow read operations listed in `AGENTS.md`. Disable hooks by not invoking 
 
 ## 4. Hook safety
 
-Hooks are opt-in, warning-only by default, read-only, no-network, and budgeted to three seconds. A hook failure must fail open with an explicit warning. Strict blocking mode requires repository-owner configuration and must provide a bypass.
+This alpha does not install or ship an analysis hook. If hooks are added later, they must be opt-in, warning-only by default, read-only, no-network, and budgeted. Strict blocking behavior is outside the current release scope.
 
 ## 5. Privacy
 
@@ -72,7 +75,8 @@ Until a public security contact exists, do not publish exploit details in an iss
 
 ## 7. Security test requirements
 
-Release tests must cover:
+`python -m pytest tests/release/test_security_gate.py` is the release security gate. Together with
+the focused unit/integration tests, it covers:
 
 - dash-prefixed and newline-containing filenames
 - shell metacharacters in change descriptions
@@ -83,6 +87,11 @@ Release tests must cover:
 - huge output truncation
 - timeout cleanup
 - worktree/index/ref equality before and after analysis
+
+Newline filenames and symlink escape run on Linux/macOS. Windows uses explicit skips because its
+filename rules and default symlink permissions do not reliably support those fixtures. The gate uses
+subprocess spies, sentinel paths, and repository digests; it never executes repository source or an
+embedded instruction.
 
 ## 8. Safe failure
 

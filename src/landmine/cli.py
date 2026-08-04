@@ -39,17 +39,28 @@ def _confidence(value: str) -> float:
 
 
 def _add_shared_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--repo", type=Path, default=Path.cwd())
-    parser.add_argument("--base")
-    parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--timeout", type=_positive_float, default=15.0)
-    parser.add_argument("--max-files", type=_positive_int, default=1000)
-    parser.add_argument("--max-commits", type=_positive_int, default=5000)
-    parser.add_argument("--include", action="append", default=[])
-    parser.add_argument("--exclude", action="append", default=[])
-    parser.add_argument("--no-color", action="store_true")
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repository to analyze")
+    parser.add_argument("--base", help="reserved for a future comparison base; currently ignored")
+    parser.add_argument(
+        "--format", choices=("markdown", "json"), default="markdown", help="output format"
+    )
+    parser.add_argument("--output", type=Path, help="write output to this file")
+    parser.add_argument("--timeout", type=_positive_float, default=15.0, help="analysis budget")
+    parser.add_argument("--max-files", type=_positive_int, default=1000, help="file scan limit")
+    parser.add_argument(
+        "--max-commits",
+        type=_positive_int,
+        default=5000,
+        help="Git history limit where supported",
+    )
+    parser.add_argument(
+        "--include", action="append", default=[], help="reserved; currently ignored"
+    )
+    parser.add_argument(
+        "--exclude", action="append", default=[], help="reserved; currently ignored"
+    )
+    parser.add_argument("--no-color", action="store_true", help="accepted; output is always plain")
+    parser.add_argument("--verbose", action="store_true", help="reserved; currently ignored")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,8 +72,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     why = subparsers.add_parser("why", help="recover historical evidence for a target")
     why.add_argument("target")
-    why.add_argument("--history-depth", type=_positive_int, default=50)
-    why.add_argument("--follow-renames", action=argparse.BooleanOptionalAction, default=True)
+    why.add_argument("--history-depth", type=_positive_int, default=50, help="commit scan limit")
+    why.add_argument(
+        "--follow-renames",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="accepted for compatibility; rename following is always enabled",
+    )
     _add_shared_options(why)
 
     assumptions = subparsers.add_parser("assumptions", help="find hidden constraints")
@@ -79,19 +95,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         default=None,
     )
-    assumptions.add_argument("--min-confidence", type=_confidence, default=0.0)
+    assumptions.add_argument(
+        "--min-confidence", type=_confidence, default=0.0, help="minimum finding confidence"
+    )
     _add_shared_options(assumptions)
 
-    blast = subparsers.add_parser("blast", help="trace change impact (Phase 3)")
+    blast = subparsers.add_parser("blast", help="trace direct Python change impact")
     blast.add_argument("change")
-    blast.add_argument("--target")
-    blast.add_argument("--depth", type=_positive_int, default=1)
+    blast.add_argument("--target", help="path, path:line-range, or symbol:name")
+    blast.add_argument("--depth", type=_positive_int, default=1, help="only depth 1 is supported")
     _add_shared_options(blast)
 
-    defuse = subparsers.add_parser("defuse", help="build a safe change plan (Phase 4)")
+    defuse = subparsers.add_parser("defuse", help="propose a non-executing safe change plan")
     defuse.add_argument("target", nargs="?")
-    defuse.add_argument("--goal")
-    defuse.add_argument("--from-result", type=Path)
+    defuse.add_argument("--goal", help="required non-empty change objective")
+    defuse.add_argument("--from-result", type=Path, help="reserved; currently returns failed")
     _add_shared_options(defuse)
     return parser
 

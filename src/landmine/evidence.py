@@ -10,20 +10,34 @@ from typing import Any
 from landmine.domain import Evidence
 
 _SECRET_PATTERNS = (
-    re.compile(r"(?i)(authorization\s*:\s*)(\S+)"),
-    re.compile(r"(?i)((?:api[_-]?key|token|password|secret)\s*[=:]\s*)(\S+)"),
-    re.compile(r"-----BEGIN [A-Z ]+PRIVATE KEY-----.*?-----END [A-Z ]+PRIVATE KEY-----", re.S),
+    (re.compile(r"(?i)(authorization\s*:\s*)([^\r\n]+)"), r"\1[REDACTED]"),
+    (
+        re.compile(r"(?i)((?:api[_-]?key|token|password|secret)\s*[=:]\s*)(\S+)"),
+        r"\1[REDACTED]",
+    ),
+    (
+        re.compile(
+            r"(?i)(\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|amqp)://)"
+            r"[^\s/@:]+:[^\s/@]+@"
+        ),
+        r"\1[REDACTED]@",
+    ),
+    (
+        re.compile(
+            r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----.*?"
+            r"(?:-----END (?:[A-Z]+ )?PRIVATE KEY-----|$)",
+            re.S,
+        ),
+        "[REDACTED]",
+    ),
 )
 
 
 def safe_excerpt(value: str, *, max_lines: int = 12, max_chars: int = 2000) -> str:
     """Cap and redact untrusted repository text while retaining evidence value."""
     excerpt = "\n".join(value.splitlines()[:max_lines])[:max_chars]
-    for pattern in _SECRET_PATTERNS:
-        excerpt = pattern.sub(
-            lambda match: f"{match.group(1)}[REDACTED]" if match.lastindex else "[REDACTED]",
-            excerpt,
-        )
+    for pattern, replacement in _SECRET_PATTERNS:
+        excerpt = pattern.sub(replacement, excerpt)
     return excerpt
 
 

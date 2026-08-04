@@ -1,0 +1,22 @@
+# Changelog
+
+All notable changes to this project will be documented in this file. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+## [0.1.0-alpha.1] - 2026-08-04
+
+### Added
+
+- Implemented `why`, `assumptions`, `blast`, and `defuse` for bounded local analysis.
+- Added Python assumption detectors and deterministic Markdown/JSON output using
+  `landmine.result.v1`.
+- Added read-only Git analysis with repository-content execution defenses.
+- Added sdist/wheel inspection, fresh-install CLI/schema smoke tests, and a security release gate.
+
+### Known limitations
+
+- Assumption detection is a bounded Python rule set, and blast analysis is depth-one Python impact.
+- Remote providers, automatic edits, hooks, marketplace publication, and definitive security or
+  complete static-analysis claims are not supported.
