@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "landmine"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Trace hidden code-change risks through local Git evidence"
 readme = "README.md"
 requires-python = ">=3.11"

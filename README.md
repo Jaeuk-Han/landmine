@@ -15,7 +15,7 @@ No package has been claimed as published yet. After obtaining or building the ca
 install that local artifact:
 
 ```bash
-python -m pip install dist/landmine-0.1.0a1-py3-none-any.whl
+python -m pip install dist/landmine-0.1.0a2-py3-none-any.whl
 landmine --version
 ```
 
@@ -100,22 +100,24 @@ Runs implemented Python detectors for non-empty collections, required mapping ke
 environment variables, required external JSON response fields, arbitrary set selection,
 working-directory-relative file access, and wall-clock duration/deadline use. `--category` can select
 `data`, `environment`, `external_contract`, `ordering`, `filesystem`, or `time`. It does not claim
-coverage for every category represented by the schema.
+coverage for every category represented by the schema. Results describe this bounded static-analysis
+coverage, and risk scores reflect only detector signals that were actually evaluated.
 
 ### `blast CHANGE --target TARGET`
 
 Requires a target and accepts the change description only as data. The current slice supports Python
 and `.pyi`, depth `1`, exact definitions, same-module references, direct imports/references, direct
-tests, candidate tests, and public-package re-export evidence. It does not compute second-hop,
-co-change, behavioral, or operational impact. Other languages and `--depth` values above one return
-an explicit partial or failed result.
+tests, candidate tests, and public-package re-export evidence. This is direct depth-one Python impact,
+not full interprocedural analysis. Python AST references include a Unicode column locator when one is
+available. It does not compute second-hop, co-change, behavioral, or operational impact. Other
+languages and `--depth` values above one return an explicit partial or failed result.
 
 ### `defuse TARGET --goal GOAL`
 
 Runs `why`, `assumptions`, and `blast` against one repository snapshot, then proposes preconditions,
 characterization tests, modification steps, verification commands, rollback triggers, and unknowns.
-It never executes source, pytest, rollback commands, or plan items. `--from-result` is reserved and
-returns a structured failed result in this alpha.
+It creates a plan but never modifies code or executes source, tests, rollback commands, or plan
+items. `--from-result` is reserved and returns a structured failed result in this alpha.
 
 All commands accept `--repo`, `--format`, `--output`, `--timeout`, `--max-files`, and
 `--max-commits`; a command can reserve a shared budget option when its current implementation does

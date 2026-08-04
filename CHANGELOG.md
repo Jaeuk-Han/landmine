@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-08-04
+
+### Fixed
+
+- Prevented zero-OID blame placeholders from reaching `git show` in CRLF checkouts, restoring
+  historical recovery for `why` and `defuse`.
+- Restored direct blast references and tests reached through package-module aliases.
+- Reduced non-empty collection false positives after terminating guards and in short-circuit
+  collection access.
+- Removed unrelated substring matches from candidate-test discovery.
+- Distinguished multiple call occurrences on the same line with stable occurrence locations.
+
+### Changed
+
+- Added bounded coverage and evaluated-signal risk interpretation to assumptions results.
+- Added optional Unicode column locations to Python AST blast reference and test impacts when
+  available.
+- Kept `landmine.result.v1`; coverage and column are optional additive fields. Consumers must use
+  the latest schema included with alpha.2 because older schema copies reject unknown fields.
+
 ## [0.1.0-alpha.1] - 2026-08-04
 
 ### Added

@@ -11,7 +11,7 @@ import tempfile
 import venv
 from pathlib import Path
 
-EXPECTED_VERSION = "0.1.0a1"
+EXPECTED_VERSION = "0.1.0a2"
 
 
 def _run(command: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:

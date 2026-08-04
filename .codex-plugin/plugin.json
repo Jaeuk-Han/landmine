@@ -1,6 +1,6 @@
 {
   "name": "landmine",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "Discover historical intent, hidden assumptions, and change blast radius before editing code.",
   "author": {
     "name": "Jaeuk Han"
