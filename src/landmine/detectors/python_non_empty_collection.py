@@ -68,17 +68,159 @@ def _negative_guard(node: ast.AST) -> str | None:
     return None
 
 
-def _definitely_exits(statements: list[ast.stmt]) -> bool:
-    return bool(statements) and isinstance(statements[-1], (ast.Return, ast.Raise))
+def _strip_call_name(node: ast.AST) -> str | None:
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "strip"
+        and not node.args
+        and not node.keywords
+    ):
+        return _name(node.func.value)
+    return None
+
+
+def _false_path_facts(node: ast.AST) -> tuple[set[str], set[str]]:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        variable = _name(node.operand)
+        if variable is not None:
+            return {variable}, set()
+        stripped = _strip_call_name(node.operand)
+        if stripped is not None:
+            return set(), {stripped}
+        return set(), set()
+    if isinstance(node, ast.BoolOp) and node.values:
+        facts = [_false_path_facts(value) for value in node.values]
+        if isinstance(node.op, ast.Or):
+            return (
+                set().union(*(collections for collections, _ in facts)),
+                set().union(*(strings for _, strings in facts)),
+            )
+        collections = set(facts[0][0])
+        strings = set(facts[0][1])
+        for next_collections, next_strings in facts[1:]:
+            collections.intersection_update(next_collections)
+            strings.intersection_update(next_strings)
+        return collections, strings
+    return set(), set()
+
+
+def _truthy_nonempty_names(node: ast.AST) -> set[str]:
+    positive = _positive_guard(node)
+    if positive is not None:
+        return {positive[0]}
+    if isinstance(node, ast.BoolOp) and node.values:
+        facts = [_truthy_nonempty_names(value) for value in node.values]
+        if isinstance(node.op, ast.And):
+            return set().union(*facts)
+        names = set(facts[0])
+        for next_names in facts[1:]:
+            names.intersection_update(next_names)
+        return names
+    return set()
+
+
+def _definitely_exits(statements: list[ast.stmt], *, in_loop: bool) -> bool:
+    if not statements:
+        return False
+    terminal = statements[-1]
+    return isinstance(terminal, (ast.Return, ast.Raise)) or (
+        in_loop and isinstance(terminal, (ast.Break, ast.Continue))
+    )
 
 
 def _assigned_names(targets: Iterable[ast.AST]) -> set[str]:
     names: set[str] = set()
     for target in targets:
-        for node in ast.walk(target):
-            if isinstance(node, ast.Name):
-                names.add(node.id)
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+        elif isinstance(target, (ast.List, ast.Tuple)):
+            names.update(_assigned_names(target.elts))
     return names
+
+
+def _empty_collection_literal(node: ast.AST) -> bool:
+    return isinstance(node, (ast.List, ast.Tuple, ast.Set, ast.Dict)) and not _is_non_empty_literal(
+        node
+    )
+
+
+def _proven_nonblank_string(node: ast.AST, known_nonblank: set[str]) -> bool:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return bool(node.value.strip())
+    if isinstance(node, ast.Name):
+        return node.id in known_nonblank
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"rstrip", "strip"}
+        and not node.args
+        and not node.keywords
+        and isinstance(node.func.value, ast.Name)
+    ):
+        return node.func.value.id in known_nonblank
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _proven_nonblank_string(node.left, known_nonblank) or _proven_nonblank_string(
+            node.right, known_nonblank
+        )
+    return False
+
+
+_MUTATING_METHODS = frozenset(
+    {"append", "clear", "extend", "insert", "pop", "remove", "__delitem__", "__setitem__"}
+)
+
+
+class _MutationCollector(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+    def _targets(self, targets: Iterable[ast.AST]) -> None:
+        self.names.update(_assigned_names(targets))
+        for target in targets:
+            if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+                self.names.add(target.value.id)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self._targets(node.targets)
+        self.visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._targets((node.target,))
+        if node.value is not None:
+            self.visit(node.value)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self._targets((node.target,))
+        self.visit(node.value)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.attr in _MUTATING_METHODS
+        ):
+            self.names.add(node.func.value.id)
+        self.generic_visit(node)
+
+
+def _mutated_names(statements: list[ast.stmt]) -> set[str]:
+    collector = _MutationCollector()
+    for statement in statements:
+        collector.visit(statement)
+    return collector.names
 
 
 class _ExpressionScanner(ast.NodeVisitor):
@@ -87,7 +229,7 @@ class _ExpressionScanner(ast.NodeVisitor):
         analyzer: _AstAnalyzer,
         *,
         protected: dict[str, str],
-        known_nonempty: set[str],
+        known_nonempty: dict[str, str],
         scope: str | None,
     ) -> None:
         self.analyzer = analyzer
@@ -98,17 +240,38 @@ class _ExpressionScanner(ast.NodeVisitor):
     def visit_Lambda(self, node: ast.Lambda) -> None:
         return
 
+    def visit_BoolOp(self, node: ast.BoolOp) -> None:
+        if isinstance(node.op, ast.And):
+            protected = dict(self.protected)
+            for value in node.values:
+                _ExpressionScanner(
+                    self.analyzer,
+                    protected=protected,
+                    known_nonempty=self.known_nonempty,
+                    scope=self.scope,
+                ).visit(value)
+                for name in _truthy_nonempty_names(value):
+                    protected[name] = "short_circuit_guard"
+            return
+        for value in node.values:
+            _ExpressionScanner(
+                self.analyzer,
+                protected=dict(self.protected),
+                known_nonempty=self.known_nonempty,
+                scope=self.scope,
+            ).visit(value)
+
     def visit_Subscript(self, node: ast.Subscript) -> None:
         signal = _index_kind(node.slice)
         if signal is not None:
             variable = _name(node.value) or ast.unparse(node.value)
             suppression = None
-            if _is_non_empty_literal(node.value) or (
-                isinstance(node.value, ast.Name) and node.value.id in self.known_nonempty
-            ):
+            if _is_non_empty_literal(node.value):
                 suppression = "statically_non_empty"
             elif isinstance(node.value, ast.Name):
-                suppression = self.protected.get(node.value.id)
+                suppression = self.known_nonempty.get(node.value.id) or self.protected.get(
+                    node.value.id
+                )
             self.analyzer.add_candidate(
                 node,
                 signal=signal,
@@ -132,12 +295,12 @@ class _ExpressionScanner(ast.NodeVisitor):
             collection = node.args[0].args[0]
             variable = _name(collection) or ast.unparse(collection)
             suppression = None
-            if _is_non_empty_literal(collection) or (
-                isinstance(collection, ast.Name) and collection.id in self.known_nonempty
-            ):
+            if _is_non_empty_literal(collection):
                 suppression = "statically_non_empty"
             elif isinstance(collection, ast.Name):
-                suppression = self.protected.get(collection.id)
+                suppression = self.known_nonempty.get(collection.id) or self.protected.get(
+                    collection.id
+                )
             self.analyzer.add_candidate(
                 node,
                 signal="next_iter",
@@ -203,7 +366,7 @@ class _AstAnalyzer:
         node: ast.AST | None,
         *,
         protected: dict[str, str],
-        known_nonempty: set[str],
+        known_nonempty: dict[str, str],
         scope: str | None,
     ) -> None:
         if node is not None:
@@ -219,11 +382,37 @@ class _AstAnalyzer:
         statements: list[ast.stmt],
         *,
         protected: dict[str, str] | None = None,
-        known_nonempty: set[str] | None = None,
+        known_nonempty: dict[str, str] | None = None,
+        known_nonblank: set[str] | None = None,
+        safe_string_elements: set[str] | None = None,
+        aliases: dict[str, str] | None = None,
         scope: str | None = None,
+        in_loop: bool = False,
     ) -> None:
         current_protected = dict(protected or {})
-        current_nonempty = set(known_nonempty or ())
+        current_nonempty = dict(known_nonempty or {})
+        current_nonblank = set(known_nonblank or ())
+        current_safe_elements = set(safe_string_elements or ())
+        current_aliases = dict(aliases or {})
+
+        def invalidate(names: set[str]) -> None:
+            canonical_names = {current_aliases.get(name, name) for name in names}
+            affected = set(names) | canonical_names
+            affected.update(
+                alias
+                for alias, canonical in current_aliases.items()
+                if canonical in canonical_names
+            )
+            for name in affected:
+                current_nonempty.pop(name, None)
+                current_protected.pop(name, None)
+                current_nonblank.discard(name)
+                current_safe_elements.discard(name)
+            current_aliases_copy = dict(current_aliases)
+            for alias, canonical in current_aliases_copy.items():
+                if alias in affected or canonical in canonical_names:
+                    current_aliases.pop(alias, None)
+
         for statement in statements:
             if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self.scan_block(statement.body, scope=statement.name)
@@ -249,17 +438,106 @@ class _AstAnalyzer:
                 self.scan_block(
                     statement.body,
                     protected=body_protected,
-                    known_nonempty=set(current_nonempty),
+                    known_nonempty=dict(current_nonempty),
+                    known_nonblank=set(current_nonblank),
+                    safe_string_elements=set(current_safe_elements),
+                    aliases=dict(current_aliases),
                     scope=scope,
+                    in_loop=in_loop,
                 )
                 self.scan_block(
                     statement.orelse,
                     protected=else_protected,
-                    known_nonempty=set(current_nonempty),
+                    known_nonempty=dict(current_nonempty),
+                    known_nonblank=set(current_nonblank),
+                    safe_string_elements=set(current_safe_elements),
+                    aliases=dict(current_aliases),
+                    scope=scope,
+                    in_loop=in_loop,
+                )
+                body_exits = _definitely_exits(statement.body, in_loop=in_loop)
+                else_exits = _definitely_exits(statement.orelse, in_loop=in_loop)
+                if body_exits:
+                    false_nonempty, false_nonblank = _false_path_facts(statement.test)
+                    for variable in false_nonempty:
+                        current_protected[variable] = "early_exit_guard"
+                    current_nonblank.update(false_nonblank)
+                branch_mutations: set[str] = set()
+                if not body_exits:
+                    branch_mutations.update(_mutated_names(statement.body))
+                if statement.orelse and not else_exits:
+                    branch_mutations.update(_mutated_names(statement.orelse))
+                invalidate(branch_mutations)
+                continue
+            if isinstance(statement, (ast.For, ast.AsyncFor)):
+                self.scan_expression(
+                    statement.iter,
+                    protected=current_protected,
+                    known_nonempty=current_nonempty,
                     scope=scope,
                 )
-                if negative is not None and _definitely_exits(statement.body):
-                    current_protected[negative] = "early_exit_guard"
+                loop_nonempty = dict(current_nonempty)
+                loop_nonblank = set(current_nonblank)
+                loop_safe_elements = set(current_safe_elements)
+                loop_aliases = dict(current_aliases)
+                assigned = _assigned_names((statement.target,))
+                for name in assigned:
+                    loop_nonempty.pop(name, None)
+                    loop_nonblank.discard(name)
+                    loop_safe_elements.discard(name)
+                    loop_aliases.pop(name, None)
+                self.scan_block(
+                    statement.body,
+                    protected={
+                        name: reason
+                        for name, reason in current_protected.items()
+                        if name not in assigned
+                    },
+                    known_nonempty=loop_nonempty,
+                    known_nonblank=loop_nonblank,
+                    safe_string_elements=loop_safe_elements,
+                    aliases=loop_aliases,
+                    scope=scope,
+                    in_loop=True,
+                )
+                self.scan_block(
+                    statement.orelse,
+                    protected=dict(current_protected),
+                    known_nonempty=dict(current_nonempty),
+                    known_nonblank=set(current_nonblank),
+                    safe_string_elements=set(current_safe_elements),
+                    aliases=dict(current_aliases),
+                    scope=scope,
+                    in_loop=in_loop,
+                )
+                continue
+            if isinstance(statement, ast.While):
+                self.scan_expression(
+                    statement.test,
+                    protected=current_protected,
+                    known_nonempty=current_nonempty,
+                    scope=scope,
+                )
+                self.scan_block(
+                    statement.body,
+                    protected=dict(current_protected),
+                    known_nonempty=dict(current_nonempty),
+                    known_nonblank=set(current_nonblank),
+                    safe_string_elements=set(current_safe_elements),
+                    aliases=dict(current_aliases),
+                    scope=scope,
+                    in_loop=True,
+                )
+                self.scan_block(
+                    statement.orelse,
+                    protected=dict(current_protected),
+                    known_nonempty=dict(current_nonempty),
+                    known_nonblank=set(current_nonblank),
+                    safe_string_elements=set(current_safe_elements),
+                    aliases=dict(current_aliases),
+                    scope=scope,
+                    in_loop=in_loop,
+                )
                 continue
             if isinstance(statement, (ast.Assign, ast.AnnAssign)):
                 value = statement.value
@@ -272,13 +550,13 @@ class _AstAnalyzer:
                     and isinstance(statement.targets[0], (ast.Tuple, ast.List))
                     and not any(isinstance(item, ast.Starred) for item in statement.targets[0].elts)
                 ):
-                    variable = _name(value) if value is not None else None
-                    if variable is not None:
-                        suppression = current_protected.get(variable)
+                    unpacked_variable = _name(value) if value is not None else None
+                    if unpacked_variable is not None:
+                        suppression = current_protected.get(unpacked_variable)
                         self.add_candidate(
                             statement,
                             signal="fixed_length_unpack",
-                            variable=variable,
+                            variable=unpacked_variable,
                             consequence="ValueError during unpacking",
                             scope=scope,
                             suppression_reason=suppression,
@@ -291,19 +569,57 @@ class _AstAnalyzer:
                     scope=scope,
                 )
                 assigned = _assigned_names(targets)
-                current_nonempty.difference_update(assigned)
-                current_protected = {
-                    name: reason
-                    for name, reason in current_protected.items()
-                    if name not in assigned
-                }
+                assigned_alias: tuple[str, str] | None = None
+                if (
+                    len(targets) == 1
+                    and isinstance(targets[0], ast.Name)
+                    and isinstance(value, ast.Name)
+                ):
+                    assigned_alias = (
+                        targets[0].id,
+                        current_aliases.get(value.id, value.id),
+                    )
+                assignment_nonempty: dict[str, str] = {}
+                assignment_nonblank: set[str] = set()
+                if len(targets) == 1 and isinstance(targets[0], ast.Name) and value is not None:
+                    target_name = targets[0].id
+                    if _is_non_empty_literal(value):
+                        assignment_nonempty[target_name] = "statically_non_empty"
+                    if _proven_nonblank_string(value, current_nonblank):
+                        assignment_nonempty[target_name] = "nonempty_string_provenance"
+                        assignment_nonblank.add(target_name)
+                    if (
+                        isinstance(value, ast.Subscript)
+                        and _index_kind(value.slice) is not None
+                        and isinstance(value.value, ast.Name)
+                        and value.value.id in current_safe_elements
+                        and (
+                            value.value.id in current_nonempty
+                            or value.value.id in current_protected
+                        )
+                    ):
+                        assignment_nonempty[target_name] = "nonempty_element_provenance"
+                        assignment_nonblank.add(target_name)
+                invalidate(assigned)
+                if assigned_alias is not None and assigned_alias[0] != assigned_alias[1]:
+                    current_aliases[assigned_alias[0]] = assigned_alias[1]
+                current_nonempty.update(assignment_nonempty)
+                current_nonblank.update(assignment_nonblank)
                 if (
                     len(targets) == 1
                     and isinstance(targets[0], ast.Name)
                     and value is not None
-                    and _is_non_empty_literal(value)
+                    and _empty_collection_literal(value)
                 ):
-                    current_nonempty.add(targets[0].id)
+                    current_safe_elements.add(targets[0].id)
+                for target in targets:
+                    if not isinstance(target, ast.Subscript) or not isinstance(
+                        target.value, ast.Name
+                    ):
+                        continue
+                    collection = target.value.id
+                    if value is None or not _proven_nonblank_string(value, current_nonblank):
+                        current_safe_elements.discard(collection)
                 continue
             expressions: list[ast.expr | None]
             if isinstance(statement, ast.Expr):
@@ -326,6 +642,32 @@ class _AstAnalyzer:
                     known_nonempty=current_nonempty,
                     scope=scope,
                 )
+            if (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Attribute)
+                and isinstance(statement.value.func.value, ast.Name)
+            ):
+                call = statement.value
+                function = call.func
+                assert isinstance(function, ast.Attribute)
+                assert isinstance(function.value, ast.Name)
+                local_collection = function.value.id
+                collection = current_aliases.get(local_collection, local_collection)
+                method = function.attr
+                if method == "append" and len(call.args) == 1 and not call.keywords:
+                    current_nonempty[collection] = "statically_non_empty"
+                    if not _proven_nonblank_string(call.args[0], current_nonblank):
+                        current_safe_elements.discard(collection)
+                elif method == "clear" or method in {
+                    "extend",
+                    "insert",
+                    "pop",
+                    "remove",
+                    "__delitem__",
+                    "__setitem__",
+                }:
+                    invalidate({local_collection})
             for nested in (
                 getattr(statement, "body", []),
                 getattr(statement, "orelse", []),
@@ -335,9 +677,17 @@ class _AstAnalyzer:
                     self.scan_block(
                         nested,
                         protected=dict(current_protected),
-                        known_nonempty=set(current_nonempty),
+                        known_nonempty=dict(current_nonempty),
+                        known_nonblank=set(current_nonblank),
+                        safe_string_elements=set(current_safe_elements),
+                        aliases=dict(current_aliases),
                         scope=scope,
+                        in_loop=in_loop,
                     )
+            if isinstance(statement, (ast.Return, ast.Raise)) or (
+                in_loop and isinstance(statement, (ast.Break, ast.Continue))
+            ):
+                break
 
 
 class PythonNonEmptyCollectionDetector:
