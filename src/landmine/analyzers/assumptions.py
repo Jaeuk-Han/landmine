@@ -31,6 +31,7 @@ from landmine.domain import (
     AnalysisStatus,
     AssumptionAnalysis,
     AssumptionCategory,
+    AssumptionCoverage,
     AssumptionDetail,
     ClaimStatus,
     ErrorDetail,
@@ -64,6 +65,20 @@ _DETECTORS: tuple[AssumptionDetector, ...] = (
     PythonArbitrarySetSelectionDetector(),
     PythonCwdRelativeFileAccessDetector(),
     PythonWallClockElapsedTimeDetector(),
+)
+_METHOD_LIMITATION = Limitation(
+    code="bounded_method",
+    message=(
+        "Coverage is limited to the recorded detector set and resolved target scope; "
+        "Landmine did not execute code or establish runtime, external-library, or "
+        "interprocedural behavior."
+    ),
+)
+_NOT_ESTABLISHED = (
+    "absence of unsupported assumption types",
+    "runtime behavior or safety",
+    "external library behavior",
+    "interprocedural behavior",
 )
 
 
@@ -103,17 +118,42 @@ def _target_dict(target: Target) -> dict[str, object]:
     }
 
 
+def _target_scope(target: Target) -> str:
+    if target.symbol is not None:
+        return "symbol"
+    if target.start_line is not None or target.end_line is not None:
+        return "line_range"
+    return "file"
+
+
+def _coverage(
+    *,
+    status: str,
+    category: str | None,
+    target_scope: str,
+) -> AssumptionCoverage:
+    return AssumptionCoverage(
+        status=status,
+        requested_category=category or "all",
+        target_scope=target_scope,
+        method="bounded static analysis over the resolved target",
+        runtime_execution=False,
+        risk_basis="signals observed by evaluated detectors only",
+        not_established=_NOT_ESTABLISHED,
+    )
+
+
 def _no_evidence_finding(
     *,
     filtered: bool = False,
     category_label: str = "data",
 ) -> Finding:
     detail = (
-        "The active detector found no supported signal at or above the minimum confidence; "
-        "the absence of other assumptions was not established."
+        "The evaluated detector found no supported signal at or above the minimum "
+        "confidence; unevaluated assumption types and runtime behavior were not established."
         if filtered
-        else f"The active detectors found no supported {category_label}-assumption signal; "
-        "the absence of other assumptions was not established."
+        else f"The evaluated detectors found no supported {category_label}-assumption "
+        "signal; unevaluated assumption types and runtime behavior were not established."
     )
     return Finding(
         id="finding_no_assumption_evidence",
@@ -239,7 +279,7 @@ def _error_result(
     monotonic: Callable[[], float],
     exc: SymbolResolutionError,
     category: str | None,
-    detectors: Sequence[AssumptionDetector],
+    target_scope: str,
 ) -> Result:
     material = f"assumptions\0{repository.head}\0symbol:{exc.symbol}\0{exc.code}\0" + ",".join(
         f"{candidate.match_kind}:{candidate.path}:{candidate.line}" for candidate in exc.candidates
@@ -272,7 +312,7 @@ def _error_result(
         ),
         findings=(),
         evidence=(),
-        limitations=(limitation,),
+        limitations=(limitation, _METHOD_LIMITATION),
         metrics=Metrics(
             elapsed_ms=max(0, round((monotonic() - started) * 1000)),
             files_scanned=exc.files_scanned,
@@ -281,9 +321,14 @@ def _error_result(
         ),
         error=ErrorDetail(code=exc.code, message=str(exc), candidates=exc.candidates),
         assumption_analysis=AssumptionAnalysis(
-            detectors_run=tuple(detector.detector_id for detector in detectors),
-            categories_scanned=_detector_categories(detectors),
+            detectors_run=(),
+            categories_scanned=(),
             suppression_count=0,
+            coverage=_coverage(
+                status="unavailable",
+                category=category,
+                target_scope=target_scope,
+            ),
         ),
     )
 
@@ -302,6 +347,7 @@ def analyze_assumptions(
 ) -> Result:
     """Analyze one Python target with the selected registered detectors."""
     detectors = _selected_detectors(category)
+    requested_scope = _target_scope(target)
     started = monotonic()
     repository, runner = (
         (snapshot.state, snapshot.runner)
@@ -331,7 +377,7 @@ def analyze_assumptions(
             monotonic=monotonic,
             exc=exc,
             category=category,
-            detectors=detectors,
+            target_scope=requested_scope,
         )
     assert resolved.path is not None
     assert resolved.start_line is not None
@@ -383,6 +429,7 @@ def analyze_assumptions(
     assert resolved.start_line is not None
     assert resolved.end_line is not None
     raw_candidates: list[AssumptionCandidate] = []
+    executed_detectors: list[AssumptionDetector] = []
     if source is not None and tree is not None:
         context = AnalysisContext(
             path=resolved.path,
@@ -391,7 +438,22 @@ def analyze_assumptions(
             end_line=resolved.end_line,
         )
         for detector in detectors:
-            raw_candidates.extend(detector.detect(context))
+            try:
+                detected = detector.detect(context)
+            except Exception:
+                limitations.append(
+                    Limitation(
+                        code="provider_failure",
+                        message=(
+                            f"Detector {detector.detector_id} failed; its findings are not "
+                            "included."
+                        ),
+                        affected=(resolved.path,),
+                    )
+                )
+                continue
+            raw_candidates.extend(detected)
+            executed_detectors.append(detector)
     limited_candidates = [item for item in raw_candidates if item.limitation_reason is not None]
     if limited_candidates:
         affected = tuple(sorted({f"{item.path}:{item.line}" for item in limited_candidates}))
@@ -916,7 +978,8 @@ def analyze_assumptions(
             ),
         )
     )
-    status = AnalysisStatus.PARTIAL if limitations else AnalysisStatus.COMPLETE
+    execution_incomplete = bool(limitations)
+    status = AnalysisStatus.PARTIAL if execution_incomplete else AnalysisStatus.COMPLETE
     actual_findings = [item for item in findings if item.type == "assumption"]
     if actual_findings:
         active_detector_ids = {
@@ -972,15 +1035,19 @@ def analyze_assumptions(
             )
     elif filtered_count:
         summary = (
-            "The active detector found no supported signal at or above the minimum confidence; "
-            f"{filtered_count} candidate(s) were filtered and {len(suppressed)} suppressed."
+            f"The {len(executed_detectors)} evaluated detector(s) found no supported signal "
+            "at or above the minimum confidence; "
+            f"{filtered_count} candidate(s) were filtered and {len(suppressed)} suppressed. "
+            "This bounded result does not establish unevaluated assumption types or runtime "
+            "behavior."
         )
     else:
         summary = (
-            f"The active detectors found no supported {category or 'registered'}-assumption "
-            "signal; "
+            f"The {len(executed_detectors)} evaluated detector(s) found no supported "
+            f"{category or 'registered'}-assumption signal; "
             f"{len(suppressed)} candidate(s) were suppressed. "
-            "The absence of other assumptions was not established."
+            "This bounded result does not establish unevaluated assumption types or runtime "
+            "behavior."
         )
     risk = score_assumptions(
         finding_count=len(actual_findings),
@@ -1011,7 +1078,7 @@ def analyze_assumptions(
         risk=risk,
         findings=tuple(findings),
         evidence=evidence,
-        limitations=tuple(limitations),
+        limitations=tuple((*limitations, _METHOD_LIMITATION)),
         metrics=Metrics(
             elapsed_ms=max(0, round((monotonic() - started) * 1000)),
             files_scanned=1 + test_files_scanned,
@@ -1019,8 +1086,13 @@ def analyze_assumptions(
             evidence_count=len(evidence),
         ),
         assumption_analysis=AssumptionAnalysis(
-            detectors_run=tuple(detector.detector_id for detector in detectors),
-            categories_scanned=_detector_categories(detectors),
+            detectors_run=tuple(detector.detector_id for detector in executed_detectors),
+            categories_scanned=_detector_categories(executed_detectors),
             suppression_count=len(suppressed),
+            coverage=_coverage(
+                status="incomplete" if execution_incomplete else "bounded",
+                category=category,
+                target_scope=requested_scope,
+            ),
         ),
     )

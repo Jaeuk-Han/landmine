@@ -387,6 +387,7 @@ def analyze_defuse(
             (item.code, item.message, item.affected): item
             for result in prerequisites
             for item in result.limitations
+            if item.code != "bounded_method"
         }.values()
     )
     if repository.dirty:

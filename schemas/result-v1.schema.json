@@ -168,6 +168,7 @@
             ,"file_level_fallback"
             ,"dirty_worktree"
             ,"repository_state_changed"
+            ,"bounded_method"
           ]
         },
         "message": {"type": "string"},
@@ -342,7 +343,33 @@
             ]
           }
         },
-        "suppression_count": {"type": "integer", "minimum": 0}
+        "suppression_count": {"type": "integer", "minimum": 0},
+        "coverage": {"$ref": "#/$defs/assumptionCoverage"}
+      }
+    },
+    "assumptionCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status", "requested_category", "target_scope", "method",
+        "runtime_execution", "risk_basis", "not_established"
+      ],
+      "properties": {
+        "status": {"enum": ["bounded", "incomplete", "unavailable"]},
+        "requested_category": {
+          "enum": [
+            "all", "data", "ordering", "time", "environment",
+            "filesystem", "external_contract"
+          ]
+        },
+        "target_scope": {"enum": ["file", "line_range", "symbol"]},
+        "method": {"type": "string"},
+        "runtime_execution": {"type": "boolean"},
+        "risk_basis": {"type": "string"},
+        "not_established": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
       }
     },
     "blastSubject": {

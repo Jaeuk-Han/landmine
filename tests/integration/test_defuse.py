@@ -60,6 +60,19 @@ def _items(result) -> tuple:
     )
 
 
+def test_assumptions_method_coverage_does_not_make_defuse_incomplete(
+    defuse_result,
+) -> None:
+    assert all(item.code != "bounded_method" for item in defuse_result.limitations)
+    assert defuse_result.defuse_analysis is not None
+    assumptions = next(
+        item
+        for item in defuse_result.defuse_analysis.prerequisites
+        if item.command == "assumptions"
+    )
+    assert assumptions.status is AnalysisStatus.COMPLETE
+
+
 def _detail(
     detector_id: str,
     *,

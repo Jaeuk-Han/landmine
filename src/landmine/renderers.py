@@ -36,6 +36,8 @@ def result_dict(result: Result) -> dict[str, Any]:
         del value["evolution"]
     if value.get("assumption_analysis") is None:
         del value["assumption_analysis"]
+    elif value["assumption_analysis"].get("coverage") is None:
+        del value["assumption_analysis"]["coverage"]
     if value.get("blast_analysis") is None:
         del value["blast_analysis"]
     if value.get("defuse_analysis") is None:
@@ -120,6 +122,14 @@ def render_markdown(result: Result) -> str:
         "## Risk",
         "",
         f"- Score: {result.risk.score}/100 ({result.risk.grade})",
+        *(
+            [
+                "- Interpretation: This score covers only signals observed by the evaluated "
+                "detectors; unevaluated assumption types and runtime behavior are outside it."
+            ]
+            if result.assumption_analysis is not None
+            else []
+        ),
         "",
         "## Findings",
         "",
@@ -255,18 +265,33 @@ def render_markdown(result: Result) -> str:
             )
         lines.append("")
     if result.assumption_analysis is not None:
+        analysis = result.assumption_analysis
         lines.extend(
             [
                 "## Detector coverage",
                 "",
                 "- Detectors run: "
-                + ", ".join(f"`{item}`" for item in result.assumption_analysis.detectors_run),
+                + (", ".join(f"`{item}`" for item in analysis.detectors_run) or "none"),
                 "- Categories scanned: "
-                + ", ".join(item.value for item in result.assumption_analysis.categories_scanned),
-                f"- Suppression count: {result.assumption_analysis.suppression_count}",
-                "",
+                + (", ".join(item.value for item in analysis.categories_scanned) or "none"),
+                f"- Suppression count: {analysis.suppression_count}",
             ]
         )
+        if analysis.coverage is not None:
+            coverage = analysis.coverage
+            lines.extend(
+                [
+                    f"- Coverage status: {coverage.status}",
+                    f"- Requested category: {coverage.requested_category}",
+                    f"- Target scope: {coverage.target_scope}",
+                    f"- Method: {coverage.method}",
+                    "- Runtime execution: "
+                    + ("performed" if coverage.runtime_execution else "not performed"),
+                    f"- Risk basis: {coverage.risk_basis}",
+                    "- Not established: " + "; ".join(coverage.not_established),
+                ]
+            )
+        lines.append("")
     lines.extend(["## Evidence", ""])
     for item in result.evidence:
         locator = ", ".join(f"{key}={value}" for key, value in sorted(item.locator.items()))

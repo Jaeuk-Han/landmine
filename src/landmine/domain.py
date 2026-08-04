@@ -115,10 +115,22 @@ class AssumptionDetail:
 
 
 @dataclass(frozen=True)
+class AssumptionCoverage:
+    status: str
+    requested_category: str
+    target_scope: str
+    method: str
+    runtime_execution: bool
+    risk_basis: str
+    not_established: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class AssumptionAnalysis:
     detectors_run: tuple[str, ...]
     categories_scanned: tuple[AssumptionCategory, ...]
     suppression_count: int
+    coverage: AssumptionCoverage | None = None
 
 
 @dataclass(frozen=True)

@@ -92,6 +92,8 @@ def test_environment_category_runs_only_environment_detector(
     result = analyze(hidden_environment_variable, category="environment")
     assert result.assumption_analysis is not None
     assert result.assumption_analysis.detectors_run == (DETECTOR_ID,)
+    assert result.assumption_analysis.coverage.requested_category == "environment"
+    assert result.assumption_analysis.coverage.status == "bounded"
     assert {item.assumption.detector_id for item in environment_findings(result)} == {DETECTOR_ID}
 
 
