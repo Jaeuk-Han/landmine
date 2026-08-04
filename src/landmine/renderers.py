@@ -7,7 +7,7 @@ import json
 from enum import Enum
 from typing import Any
 
-from landmine.domain import PlanItem, Result
+from landmine.domain import BlastImpact, PlanItem, Result
 
 
 def _primitive(value: Any) -> Any:
@@ -44,6 +44,12 @@ def result_dict(result: Result) -> dict[str, Any]:
         del value["defuse_analysis"]
     if result.command != "blast":
         del value["impacts"]
+    else:
+        for impact in value["impacts"]:
+            if impact.get("start_column") is None:
+                del impact["start_column"]
+            if impact.get("end_column") is None:
+                del impact["end_column"]
     if result.command != "defuse":
         value["plan"].pop("unknowns", None)
     for finding in value.get("findings", []):
@@ -350,7 +356,7 @@ def _render_blast_markdown(result: Result) -> str:
             path = " → ".join(impact.path_from_target)
             lines.extend(
                 [
-                    f"### {impact.impact_type}: {impact.path}:{impact.start_line}",
+                    f"### {impact.impact_type}: {_blast_impact_location(impact)}",
                     "",
                     f"- Status: {impact.status.value} ({impact.confidence:.2f})",
                     f"- Reason: {impact.reason}",
@@ -366,7 +372,7 @@ def _render_blast_markdown(result: Result) -> str:
     if direct_tests:
         for impact in direct_tests:
             lines.append(
-                f"- Direct test: {impact.path}:{impact.start_line} "
+                f"- Direct test: {_blast_impact_location(impact)} "
                 f"(evidence: {', '.join(impact.evidence_ids)})"
             )
         lines.append(
@@ -408,6 +414,13 @@ def _render_blast_markdown(result: Result) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _blast_impact_location(impact: BlastImpact) -> str:
+    location = f"{impact.path}:{impact.start_line}"
+    if impact.start_column is not None:
+        location += f":{impact.start_column}"
+    return location
 
 
 def _render_plan_items(lines: list[str], items: tuple[PlanItem, ...], *, empty: str) -> None:

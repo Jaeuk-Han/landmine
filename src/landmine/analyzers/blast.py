@@ -68,6 +68,8 @@ class _Reference:
     excerpt: str
     binding_line: int | None = None
     binding_name: str | None = None
+    start_column: int | None = None
+    end_column: int | None = None
 
 
 def _utc_now() -> datetime:
@@ -261,6 +263,68 @@ def _subject_label(subject: BlastSubject) -> str:
     return f"module {subject.path}"
 
 
+def _byte_offset_to_character_column(line: str, offset: int) -> int | None:
+    if offset < 0:
+        return None
+    encoded = line.encode("utf-8")
+    if offset > len(encoded):
+        return None
+    try:
+        prefix = encoded[:offset].decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return len(prefix) + 1
+
+
+def _node_character_columns(line: str, node: ast.AST) -> tuple[int | None, int | None]:
+    start_offset = getattr(node, "col_offset", None)
+    end_offset = getattr(node, "end_col_offset", None)
+    line_number = getattr(node, "lineno", None)
+    end_line_number = getattr(node, "end_lineno", None)
+    if (
+        not isinstance(start_offset, int)
+        or not isinstance(end_offset, int)
+        or line_number != end_line_number
+    ):
+        return None, None
+    start_column = _byte_offset_to_character_column(line, start_offset)
+    end_column = _byte_offset_to_character_column(line, end_offset)
+    if start_column is None or end_column is None or end_column < start_column:
+        return None, None
+    return start_column, end_column
+
+
+def _reference_from_node(
+    *,
+    local_name: str,
+    node: ast.Name | ast.Attribute,
+    source: str,
+    binding_line: int | None = None,
+    binding_name: str | None = None,
+) -> _Reference:
+    excerpt = _source_line(source, node.lineno)
+    start_column, end_column = _node_character_columns(excerpt, node)
+    return _Reference(
+        local_name=local_name,
+        line=node.lineno,
+        column=node.col_offset,
+        excerpt=excerpt,
+        binding_line=binding_line,
+        binding_name=binding_name,
+        start_column=start_column,
+        end_column=end_column,
+    )
+
+
+def _column_locator(reference: _Reference) -> dict[str, int]:
+    if reference.start_column is None or reference.end_column is None:
+        return {}
+    return {
+        "start_column": reference.start_column,
+        "end_column": reference.end_column,
+    }
+
+
 def _impact_id(
     impact_type: str,
     path: str,
@@ -268,17 +332,20 @@ def _impact_id(
     end_line: int,
     symbol: str | None,
     evidence_ids: Sequence[str],
+    start_column: int | None = None,
+    end_column: int | None = None,
 ) -> str:
-    material = "\0".join(
-        (
-            impact_type,
-            path,
-            str(line),
-            str(end_line),
-            symbol or "",
-            ",".join(sorted(evidence_ids)),
-        )
-    )
+    parts = [
+        impact_type,
+        path,
+        str(line),
+        str(end_line),
+        symbol or "",
+        ",".join(sorted(evidence_ids)),
+    ]
+    if start_column is not None and end_column is not None:
+        parts.extend((str(start_column), str(end_column)))
+    material = "\0".join(parts)
     return f"impact_{hashlib.sha256(material.encode()).hexdigest()[:12]}"
 
 
@@ -294,11 +361,22 @@ def _make_impact(
     path_from_target: Sequence[str],
     reason: str,
     limitations: Sequence[str] = (),
+    start_column: int | None = None,
+    end_column: int | None = None,
 ) -> BlastImpact:
     ordered_evidence = tuple(sorted(set(evidence_ids)))
     resolved_end_line = end_line or line
     return BlastImpact(
-        id=_impact_id(impact_type, path, line, resolved_end_line, symbol, ordered_evidence),
+        id=_impact_id(
+            impact_type,
+            path,
+            line,
+            resolved_end_line,
+            symbol,
+            ordered_evidence,
+            start_column,
+            end_column,
+        ),
         impact_type=impact_type,
         path=path,
         start_line=line,
@@ -310,6 +388,8 @@ def _make_impact(
         path_from_target=tuple(path_from_target),
         reason=reason,
         limitations=tuple(sorted(set(limitations))),
+        start_column=start_column,
+        end_column=end_column,
     )
 
 
@@ -477,13 +557,12 @@ def _find_references(
                     )
                 ):
                     references.append(
-                        _Reference(
-                            binding.local_name,
-                            node.lineno,
-                            node.col_offset,
-                            _source_line(source, node.lineno),
-                            binding.line,
-                            binding.local_name,
+                        _reference_from_node(
+                            local_name=binding.local_name,
+                            node=node,
+                            source=source,
+                            binding_line=binding.line,
+                            binding_name=binding.local_name,
                         )
                     )
             elif binding.kind in {"module", "module_symbol"} and isinstance(node, ast.Attribute):
@@ -500,13 +579,12 @@ def _find_references(
                 if target_symbol is not None and node.attr != target_symbol:
                     continue
                 references.append(
-                    _Reference(
-                        node.attr,
-                        node.lineno,
-                        node.col_offset,
-                        _source_line(source, node.lineno),
-                        binding.line,
-                        binding.local_name,
+                    _reference_from_node(
+                        local_name=node.attr,
+                        node=node,
+                        source=source,
+                        binding_line=binding.line,
+                        binding_name=binding.local_name,
                     )
                 )
     return tuple(
@@ -527,7 +605,7 @@ def _find_same_module_references(
     parents = _parent_map(tree)
     locals_by_function = _function_local_names(tree)
     references = [
-        _Reference(symbol, node.lineno, node.col_offset, _source_line(source, node.lineno))
+        _reference_from_node(local_name=symbol, node=node, source=source)
         for node in ast.walk(tree)
         if isinstance(node, ast.Name)
         and isinstance(node.ctx, ast.Load)
@@ -807,6 +885,7 @@ def analyze_blast(
                     "path": subject.path,
                     "start_line": local_reference.line,
                     "end_line": local_reference.line,
+                    **_column_locator(local_reference),
                     "relationship": "same-module target definition reference",
                 },
                 excerpt=local_reference.excerpt,
@@ -827,6 +906,8 @@ def analyze_blast(
                         f"referenced in the same module at {subject.path}:{local_reference.line}",
                     ),
                     reason="The reference resolves to the target definition in the same module.",
+                    start_column=local_reference.start_column,
+                    end_column=local_reference.end_column,
                 )
             )
     target_module = _module_name(subject.path)
@@ -923,6 +1004,7 @@ def analyze_blast(
                         "path": path,
                         "start_line": reference.line,
                         "end_line": reference.line,
+                        **_column_locator(reference),
                         "relationship": "test imports and references blast target",
                     },
                     excerpt=reference.excerpt,
@@ -947,6 +1029,8 @@ def analyze_blast(
                             "The test has a proven target import and reference; its existence "
                             "does not establish behavioral coverage."
                         ),
+                        start_column=reference.start_column,
+                        end_column=reference.end_column,
                     )
                 )
             continue
@@ -974,6 +1058,7 @@ def analyze_blast(
                     "path": path,
                     "start_line": reference.line,
                     "end_line": reference.line,
+                    **_column_locator(reference),
                     "relationship": "proven imported target reference",
                 },
                 excerpt=reference.excerpt,
@@ -995,6 +1080,8 @@ def analyze_blast(
                         f"referenced at {path}:{reference.line}",
                     ),
                     reason="The reference resolves through a proven Python import binding.",
+                    start_column=reference.start_column,
+                    end_column=reference.end_column,
                 )
             )
         if path.endswith("/__init__.py") and bindings:
@@ -1052,6 +1139,8 @@ def _result(
                 ),
                 item.path,
                 item.start_line,
+                item.start_column or 0,
+                item.end_column or 0,
                 item.id,
             ),
         )

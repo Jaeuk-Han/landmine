@@ -386,6 +386,10 @@
     "blastImpact": {
       "type": "object",
       "additionalProperties": false,
+      "dependentRequired": {
+        "start_column": ["end_column"],
+        "end_column": ["start_column"]
+      },
       "required": [
         "id", "impact_type", "path", "start_line", "end_line", "symbol",
         "status", "confidence", "evidence_ids", "path_from_target", "reason",
@@ -397,6 +401,16 @@
         "path": {"type": "string"},
         "start_line": {"type": "integer", "minimum": 1},
         "end_line": {"type": "integer", "minimum": 1},
+        "start_column": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based Unicode code-point column"
+        },
+        "end_column": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based exclusive Unicode code-point column"
+        },
         "symbol": {"type": ["string", "null"]},
         "status": {"enum": ["direct", "inferred"]},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},

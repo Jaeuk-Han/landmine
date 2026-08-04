@@ -155,6 +155,18 @@ class BlastImpact:
     path_from_target: tuple[str, ...]
     reason: str
     limitations: tuple[str, ...] = ()
+    start_column: int | None = None
+    end_column: int | None = None
+
+    def __post_init__(self) -> None:
+        if (self.start_column is None) != (self.end_column is None):
+            raise ValueError("start_column and end_column must be provided together")
+        if self.start_column is None or self.end_column is None:
+            return
+        if self.start_column < 1:
+            raise ValueError("start_column must be at least 1")
+        if self.end_column < self.start_column:
+            raise ValueError("end_column must be greater than or equal to start_column")
 
 
 @dataclass(frozen=True)
