@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -543,14 +542,26 @@ def _find_same_module_references(
     )
 
 
-def _candidate_test(path: str, source: str, subject: BlastSubject) -> bool:
+def _candidate_test(
+    path: str,
+    tree: ast.Module,
+    subject: BlastSubject,
+    *,
+    imports_target: bool = False,
+) -> bool:
     if not _is_test_path(path):
         return False
-    terms = [Path(subject.path).stem]
-    if subject.symbol:
-        terms.append(subject.symbol)
-    normalized = re.sub(r"[^a-z0-9]", "", source.lower())
-    return any(re.sub(r"[^a-z0-9]", "", term.lower()) in normalized for term in terms)
+    module_stem = Path(subject.path).stem.casefold()
+    test_stem = Path(path).stem.casefold()
+    if test_stem in {f"test_{module_stem}", f"{module_stem}_test"}:
+        return True
+    if subject.symbol is not None and any(
+        (isinstance(node, ast.Name) and node.id == subject.symbol)
+        or (isinstance(node, ast.Attribute) and node.attr == subject.symbol)
+        for node in ast.walk(tree)
+    ):
+        return True
+    return imports_target
 
 
 def _error_result(
@@ -845,6 +856,7 @@ def analyze_blast(
             target_module=target_module,
             target_symbol=subject.symbol,
         )
+        imports_target = bool(bindings or wildcard_lines or unresolved)
         for line in wildcard_lines:
             limitations.append(
                 Limitation(
@@ -874,7 +886,12 @@ def analyze_blast(
             or (binding.line, binding.local_name) in proven_module_symbol_bindings
         )
         if not bindings:
-            if _candidate_test(path, candidate_source, subject):
+            if _candidate_test(
+                path,
+                tree,
+                subject,
+                imports_target=imports_target,
+            ):
                 candidate_tests.add(path)
             continue
 

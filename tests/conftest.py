@@ -1080,7 +1080,8 @@ def direct_blast(git_fixture: GitFixture) -> GitFixture:
                 '    assert HospitalFallback().route() == "fallback"\n'
             ),
             "tests/test_candidate.py": (
-                "def test_hospital_fallback_candidate_name_only():\n    assert True\n"
+                "def test_hospital_fallback_candidate_name_only(HospitalFallback):\n"
+                "    assert HospitalFallback\n"
             ),
         },
     )
@@ -1136,7 +1137,8 @@ def defuse_plan(git_fixture: GitFixture) -> GitFixture:
                 '    assert select_route([1], {"disabled": True, "status": "ok"}) == "fallback"\n'
             ),
             "tests/test_candidate.py": (
-                "def test_select_route_candidate_name_only():\n    assert True\n"
+                "def test_select_route_candidate_name_only(select_route):\n"
+                "    assert select_route\n"
             ),
             "pyproject.toml": ('[tool.pytest.ini_options]\ntestpaths = ["tests"]\n'),
         },
