@@ -205,6 +205,7 @@ def line_log(
             f"--max-count={max(1, max_commits)}",
             "--format=%x1e%H%x1f%aI%x1f%s",
             "--patch",
+            "HEAD",
             "-L",
             f"{start_line},{end_line}:{path}",
         ],

@@ -93,7 +93,7 @@ def _commit_summary_and_paths(runner: GitRunner, commit: str) -> tuple[str, tupl
     return summary, paths
 
 
-def _head_symbol_range(runner: GitRunner, target: Target) -> Target:
+def _head_symbol_range(runner: GitRunner, target: Target) -> tuple[Target, bool]:
     if (
         target.symbol is None
         or target.path is None
@@ -101,18 +101,18 @@ def _head_symbol_range(runner: GitRunner, target: Target) -> Target:
         or target.start_line is None
         or target.end_line != target.start_line
     ):
-        return target
+        return target, False
     source = runner.run(["show", f"HEAD:{target.path}"], check=False)
     if source.returncode != 0 or source.truncated:
-        return target
+        return target, False
     try:
         tree = ast.parse(source.stdout)
     except SyntaxError:
-        return target
+        return target, False
     matches = tuple(
         node
         for node in ast.walk(tree)
-        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+        if isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef, ast.FunctionDef))
         and node.name == target.symbol
         and node.end_lineno is not None
     )
@@ -121,12 +121,18 @@ def _head_symbol_range(runner: GitRunner, target: Target) -> Target:
         matches[0] if len(matches) == 1 else None,
     )
     if selected is None:
-        return target
-    return Target(
-        path=target.path,
-        start_line=selected.lineno,
-        end_line=selected.end_lineno,
-        symbol=target.symbol,
+        return target, False
+    start_line = selected.lineno
+    if isinstance(selected, ast.ClassDef) and selected.decorator_list:
+        start_line = min(start_line, *(decorator.lineno for decorator in selected.decorator_list))
+    return (
+        Target(
+            path=target.path,
+            start_line=start_line,
+            end_line=selected.end_lineno,
+            symbol=target.symbol,
+        ),
+        isinstance(selected, ast.ClassDef),
     )
 
 
@@ -161,7 +167,7 @@ def analyze_why(
                 monotonic=monotonic,
             )
         resolved = resolve_line_range(resolve_path_target(target, root), root)
-        resolved = _head_symbol_range(runner, resolved)
+        resolved, class_history_scope = _head_symbol_range(runner, resolved)
     except SymbolResolutionError as exc:
         limitations = [
             Limitation(
@@ -265,13 +271,14 @@ def analyze_why(
 
     line_records: tuple[LineLogRecord, ...] = ()
     line_history_limitation: Limitation | None = None
+    class_history_truncated = False
     try:
         line_output = line_log(
             runner,
             path=resolved.path,
             start_line=resolved.start_line,
             end_line=resolved.end_line,
-            max_commits=history_depth,
+            max_commits=history_depth + 1 if class_history_scope else history_depth,
         )
         if line_output.returncode != 0:
             line_history_limitation = Limitation(
@@ -293,6 +300,17 @@ def analyze_why(
                     message=(
                         "git log -L returned no parseable evolution; "
                         "git log --follow evidence was used as fallback."
+                    ),
+                    affected=(resolved.path,),
+                )
+            elif class_history_scope and len(line_records) > history_depth:
+                line_records = line_records[-history_depth:]
+                class_history_truncated = True
+                line_history_limitation = Limitation(
+                    code="budget_exhausted",
+                    message=(
+                        "Class line evolution exceeded the configured history depth; "
+                        "the newest bounded commits are shown and introduction is unknown."
                     ),
                     affected=(resolved.path,),
                 )
@@ -395,7 +413,7 @@ def analyze_why(
                 tests_by_commit[commit].append(test_item.id)
 
     primary_commit: str | None = None
-    if line_records:
+    if line_records and not class_history_truncated:
         corroborated = tuple(
             record
             for record in line_records

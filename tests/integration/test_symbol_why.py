@@ -53,7 +53,7 @@ def test_symbol_why_connects_single_candidate_to_pipeline(
     assert result.request["target"] == {
         "path": "src/routing.py",
         "start_line": 1,
-        "end_line": 1,
+        "end_line": 3,
         "symbol": "HospitalFallback",
     }
     assert any(item.kind == "git_blame" for item in result.evidence)

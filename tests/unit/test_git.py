@@ -56,6 +56,7 @@ def test_log_l_uses_argument_array(tmp_path: Path) -> None:
     assert command[log_index + 1 : log_index + 3] == list(DIFF_MACHINERY_SAFETY_OPTIONS)
     assert "-L" in command
     assert "5,6:src/routing.py" in command
+    assert "HEAD" in command
     assert run.call_args.kwargs["shell"] is False
 
 
