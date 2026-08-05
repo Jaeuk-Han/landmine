@@ -13,6 +13,16 @@ def _name(node: ast.AST) -> str | None:
     return node.id if isinstance(node, ast.Name) else None
 
 
+def _root_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Starred):
+        return _root_name(node.value)
+    if isinstance(node, (ast.Attribute, ast.Subscript)):
+        return _root_name(node.value)
+    return None
+
+
 def _is_non_empty_literal(node: ast.AST) -> bool:
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         return bool(node.elts)
@@ -34,6 +44,148 @@ def _index_kind(node: ast.AST) -> str | None:
     ):
         return "negative_index"
     return None
+
+
+def _literal_integer_index(node: ast.AST) -> int | None:
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+    ):
+        return node.value
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+        and not isinstance(node.operand.value, bool)
+    ):
+        return -node.operand.value
+    return None
+
+
+_FIXED_TUPLE_SUPPRESSION = (
+    "The inner access is covered by an explicit fixed-length tuple element contract."
+)
+
+
+def _bound_names(statement: ast.stmt) -> set[str]:
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {statement.name}
+    if isinstance(statement, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+        return _assigned_names(targets)
+    if isinstance(statement, (ast.Import, ast.ImportFrom)):
+        names: set[str] = set()
+        for alias in statement.names:
+            if alias.name == "*":
+                continue
+            names.add(alias.asname or alias.name.split(".", 1)[0])
+        return names
+    return set()
+
+
+def _annotation_generic_name(
+    node: ast.AST,
+    *,
+    builtin_name: str,
+    typing_name: str,
+    typing_modules: set[str],
+    typing_aliases: set[str],
+    builtin_available: bool,
+) -> bool:
+    if isinstance(node, ast.Name):
+        return (builtin_available and node.id == builtin_name) or node.id in typing_aliases
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in typing_modules
+        and node.attr == typing_name
+    )
+
+
+def _fixed_tuple_arity(
+    annotation: ast.AST | None,
+    *,
+    typing_modules: set[str],
+    list_aliases: set[str],
+    tuple_aliases: set[str],
+    builtin_list_available: bool,
+    builtin_tuple_available: bool,
+) -> int | None:
+    if not isinstance(annotation, ast.Subscript):
+        return None
+    if not _annotation_generic_name(
+        annotation.value,
+        builtin_name="list",
+        typing_name="List",
+        typing_modules=typing_modules,
+        typing_aliases=list_aliases,
+        builtin_available=builtin_list_available,
+    ):
+        return None
+    element = annotation.slice
+    if not isinstance(element, ast.Subscript) or not _annotation_generic_name(
+        element.value,
+        builtin_name="tuple",
+        typing_name="Tuple",
+        typing_modules=typing_modules,
+        typing_aliases=tuple_aliases,
+        builtin_available=builtin_tuple_available,
+    ):
+        return None
+    arguments = element.slice.elts if isinstance(element.slice, ast.Tuple) else [element.slice]
+    if len(arguments) not in {2, 3} or any(
+        isinstance(argument, ast.Constant) and argument.value is Ellipsis for argument in arguments
+    ):
+        return None
+    return len(arguments)
+
+
+def _module_fixed_tuple_helpers(tree: ast.Module) -> dict[str, int]:
+    bindings: dict[str, list[ast.stmt]] = {}
+    for statement in tree.body:
+        for name in _bound_names(statement):
+            bindings.setdefault(name, []).append(statement)
+
+    typing_modules: set[str] = set()
+    list_aliases: set[str] = set()
+    tuple_aliases: set[str] = set()
+    for statement in tree.body:
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                if alias.name != "typing":
+                    continue
+                local_name = alias.asname or "typing"
+                if bindings.get(local_name) == [statement]:
+                    typing_modules.add(local_name)
+        elif isinstance(statement, ast.ImportFrom) and statement.module == "typing":
+            for alias in statement.names:
+                local_name = alias.asname or alias.name
+                if bindings.get(local_name) != [statement]:
+                    continue
+                if alias.name == "List":
+                    list_aliases.add(local_name)
+                elif alias.name == "Tuple":
+                    tuple_aliases.add(local_name)
+
+    helpers: dict[str, int] = {}
+    for statement in tree.body:
+        if not isinstance(statement, ast.FunctionDef):
+            continue
+        if statement.decorator_list or bindings.get(statement.name) != [statement]:
+            continue
+        arity = _fixed_tuple_arity(
+            statement.returns,
+            typing_modules=typing_modules,
+            list_aliases=list_aliases,
+            tuple_aliases=tuple_aliases,
+            builtin_list_available="list" not in bindings,
+            builtin_tuple_available="tuple" not in bindings,
+        )
+        if arity is not None:
+            helpers[statement.name] = arity
+    return helpers
 
 
 def _positive_guard(node: ast.AST) -> tuple[str, str] | None:
@@ -145,6 +297,10 @@ def _empty_collection_literal(node: ast.AST) -> bool:
     )
 
 
+def _empty_list_literal(node: ast.AST) -> bool:
+    return isinstance(node, ast.List) and not node.elts
+
+
 def _proven_nonblank_string(node: ast.AST, known_nonblank: set[str]) -> bool:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return bool(node.value.strip())
@@ -223,6 +379,105 @@ def _mutated_names(statements: list[ast.stmt]) -> set[str]:
     return collector.names
 
 
+class _LocalBindingCollector(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, (ast.Store, ast.Del)):
+            self.names.add(node.id)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.names.add(node.name)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.names.add(node.name)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.names.add(node.name)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            self.names.add(alias.asname or alias.name.split(".", 1)[0])
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for alias in node.names:
+            if alias.name != "*":
+                self.names.add(alias.asname or alias.name)
+
+
+def _function_local_bindings(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> set[str]:
+    collector = _LocalBindingCollector()
+    for statement in node.body:
+        collector.visit(statement)
+    arguments = (
+        *node.args.posonlyargs,
+        *node.args.args,
+        *node.args.kwonlyargs,
+    )
+    collector.names.update(argument.arg for argument in arguments)
+    if node.args.vararg is not None:
+        collector.names.add(node.args.vararg.arg)
+    if node.args.kwarg is not None:
+        collector.names.add(node.args.kwarg.arg)
+    return collector.names
+
+
+class _PotentialMutationCollector(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name) and node.func.id == "len":
+            self.generic_visit(node)
+            return
+        if isinstance(node.func, ast.Attribute):
+            receiver = _root_name(node.func.value)
+            if receiver is not None:
+                self.names.add(receiver)
+        for argument in node.args:
+            name = _root_name(argument)
+            if name is not None:
+                self.names.add(name)
+        for keyword in node.keywords:
+            name = _root_name(keyword.value)
+            if name is not None:
+                self.names.add(name)
+        self.generic_visit(node)
+
+
+def _potentially_mutated_names(node: ast.AST | None) -> set[str]:
+    if node is None:
+        return set()
+    collector = _PotentialMutationCollector()
+    collector.visit(node)
+    return collector.names
+
+
+def _potentially_mutated_names_in(statements: list[ast.stmt]) -> set[str]:
+    names: set[str] = set()
+    for statement in statements:
+        names.update(_potentially_mutated_names(statement))
+    return names
+
+
 class _ExpressionScanner(ast.NodeVisitor):
     def __init__(
         self,
@@ -230,11 +485,13 @@ class _ExpressionScanner(ast.NodeVisitor):
         *,
         protected: dict[str, str],
         known_nonempty: dict[str, str],
+        fixed_tuple_elements: dict[str, int],
         scope: str | None,
     ) -> None:
         self.analyzer = analyzer
         self.protected = protected
         self.known_nonempty = known_nonempty
+        self.fixed_tuple_elements = fixed_tuple_elements
         self.scope = scope
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
@@ -248,6 +505,7 @@ class _ExpressionScanner(ast.NodeVisitor):
                     self.analyzer,
                     protected=protected,
                     known_nonempty=self.known_nonempty,
+                    fixed_tuple_elements=self.fixed_tuple_elements,
                     scope=self.scope,
                 ).visit(value)
                 for name in _truthy_nonempty_names(value):
@@ -258,17 +516,29 @@ class _ExpressionScanner(ast.NodeVisitor):
                 self.analyzer,
                 protected=dict(self.protected),
                 known_nonempty=self.known_nonempty,
+                fixed_tuple_elements=self.fixed_tuple_elements,
                 scope=self.scope,
             ).visit(value)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
         signal = _index_kind(node.slice)
+        fixed_tuple_suppression = False
+        if (
+            isinstance(node.value, ast.Subscript)
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id in self.fixed_tuple_elements
+        ):
+            index = _literal_integer_index(node.slice)
+            arity = self.fixed_tuple_elements[node.value.value.id]
+            fixed_tuple_suppression = index is not None and -arity <= index < arity
+            if fixed_tuple_suppression and signal is None:
+                signal = "fixed_tuple_index"
         if signal is not None:
             variable = _name(node.value) or ast.unparse(node.value)
-            suppression = None
-            if _is_non_empty_literal(node.value):
+            suppression = _FIXED_TUPLE_SUPPRESSION if fixed_tuple_suppression else None
+            if suppression is None and _is_non_empty_literal(node.value):
                 suppression = "statically_non_empty"
-            elif isinstance(node.value, ast.Name):
+            elif suppression is None and isinstance(node.value, ast.Name):
                 suppression = self.known_nonempty.get(node.value.id) or self.protected.get(
                     node.value.id
                 )
@@ -313,9 +583,10 @@ class _ExpressionScanner(ast.NodeVisitor):
 
 
 class _AstAnalyzer:
-    def __init__(self, context: AnalysisContext) -> None:
+    def __init__(self, context: AnalysisContext, *, fixed_tuple_helpers: dict[str, int]) -> None:
         self.context = context
         self.candidates: list[AssumptionCandidate] = []
+        self.fixed_tuple_helpers = fixed_tuple_helpers
 
     def add_candidate(
         self,
@@ -367,15 +638,47 @@ class _AstAnalyzer:
         *,
         protected: dict[str, str],
         known_nonempty: dict[str, str],
+        fixed_tuple_elements: dict[str, int],
+        aliases: dict[str, str],
         scope: str | None,
     ) -> None:
         if node is not None:
+            possibly_mutated = {
+                aliases.get(name, name) for name in _potentially_mutated_names(node)
+            }
             _ExpressionScanner(
                 self,
                 protected=protected,
                 known_nonempty=known_nonempty,
+                fixed_tuple_elements={
+                    name: arity
+                    for name, arity in fixed_tuple_elements.items()
+                    if name not in possibly_mutated
+                },
                 scope=scope,
             ).visit(node)
+
+    def fixed_tuple_assignment_arity(
+        self,
+        node: ast.AST,
+        *,
+        blocked_helpers: set[str],
+    ) -> int | None:
+        call = node
+        if isinstance(node, ast.IfExp):
+            if _empty_list_literal(node.body):
+                call = node.orelse
+            elif _empty_list_literal(node.orelse):
+                call = node.body
+            else:
+                return None
+        if (
+            not isinstance(call, ast.Call)
+            or not isinstance(call.func, ast.Name)
+            or call.func.id in blocked_helpers
+        ):
+            return None
+        return self.fixed_tuple_helpers.get(call.func.id)
 
     def scan_block(
         self,
@@ -386,6 +689,9 @@ class _AstAnalyzer:
         known_nonblank: set[str] | None = None,
         safe_string_elements: set[str] | None = None,
         aliases: dict[str, str] | None = None,
+        fixed_tuple_elements: dict[str, int] | None = None,
+        blocked_helpers: set[str] | None = None,
+        allow_fixed_tuple_contracts: bool = False,
         scope: str | None = None,
         in_loop: bool = False,
     ) -> None:
@@ -394,6 +700,13 @@ class _AstAnalyzer:
         current_nonblank = set(known_nonblank or ())
         current_safe_elements = set(safe_string_elements or ())
         current_aliases = dict(aliases or {})
+        current_fixed_tuple_elements = dict(fixed_tuple_elements or {})
+        current_blocked_helpers = set(blocked_helpers or ())
+
+        def invalidate_fixed(names: set[str]) -> None:
+            canonical_names = {current_aliases.get(name, name) for name in names}
+            for name in canonical_names:
+                current_fixed_tuple_elements.pop(name, None)
 
         def invalidate(names: set[str]) -> None:
             canonical_names = {current_aliases.get(name, name) for name in names}
@@ -408,6 +721,7 @@ class _AstAnalyzer:
                 current_protected.pop(name, None)
                 current_nonblank.discard(name)
                 current_safe_elements.discard(name)
+                current_fixed_tuple_elements.pop(name, None)
             current_aliases_copy = dict(current_aliases)
             for alias, canonical in current_aliases_copy.items():
                 if alias in affected or canonical in canonical_names:
@@ -415,7 +729,12 @@ class _AstAnalyzer:
 
         for statement in statements:
             if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                self.scan_block(statement.body, scope=statement.name)
+                self.scan_block(
+                    statement.body,
+                    blocked_helpers=_function_local_bindings(statement),
+                    allow_fixed_tuple_contracts=True,
+                    scope=statement.name,
+                )
                 continue
             if isinstance(statement, ast.ClassDef):
                 self.scan_block(statement.body, scope=statement.name)
@@ -425,8 +744,11 @@ class _AstAnalyzer:
                     statement.test,
                     protected=current_protected,
                     known_nonempty=current_nonempty,
+                    fixed_tuple_elements=current_fixed_tuple_elements,
+                    aliases=current_aliases,
                     scope=scope,
                 )
+                invalidate_fixed(_potentially_mutated_names(statement.test))
                 positive = _positive_guard(statement.test)
                 negative = _negative_guard(statement.test)
                 body_protected = dict(current_protected)
@@ -442,6 +764,9 @@ class _AstAnalyzer:
                     known_nonblank=set(current_nonblank),
                     safe_string_elements=set(current_safe_elements),
                     aliases=dict(current_aliases),
+                    fixed_tuple_elements=dict(current_fixed_tuple_elements),
+                    blocked_helpers=current_blocked_helpers,
+                    allow_fixed_tuple_contracts=allow_fixed_tuple_contracts,
                     scope=scope,
                     in_loop=in_loop,
                 )
@@ -452,6 +777,9 @@ class _AstAnalyzer:
                     known_nonblank=set(current_nonblank),
                     safe_string_elements=set(current_safe_elements),
                     aliases=dict(current_aliases),
+                    fixed_tuple_elements=dict(current_fixed_tuple_elements),
+                    blocked_helpers=current_blocked_helpers,
+                    allow_fixed_tuple_contracts=allow_fixed_tuple_contracts,
                     scope=scope,
                     in_loop=in_loop,
                 )
@@ -468,14 +796,21 @@ class _AstAnalyzer:
                 if statement.orelse and not else_exits:
                     branch_mutations.update(_mutated_names(statement.orelse))
                 invalidate(branch_mutations)
+                invalidate_fixed(
+                    _potentially_mutated_names_in(statement.body)
+                    | _potentially_mutated_names_in(statement.orelse)
+                )
                 continue
             if isinstance(statement, (ast.For, ast.AsyncFor)):
                 self.scan_expression(
                     statement.iter,
                     protected=current_protected,
                     known_nonempty=current_nonempty,
+                    fixed_tuple_elements=current_fixed_tuple_elements,
+                    aliases=current_aliases,
                     scope=scope,
                 )
+                invalidate_fixed(_potentially_mutated_names(statement.iter))
                 loop_nonempty = dict(current_nonempty)
                 loop_nonblank = set(current_nonblank)
                 loop_safe_elements = set(current_safe_elements)
@@ -497,6 +832,9 @@ class _AstAnalyzer:
                     known_nonblank=loop_nonblank,
                     safe_string_elements=loop_safe_elements,
                     aliases=loop_aliases,
+                    fixed_tuple_elements=dict(current_fixed_tuple_elements),
+                    blocked_helpers=current_blocked_helpers,
+                    allow_fixed_tuple_contracts=allow_fixed_tuple_contracts,
                     scope=scope,
                     in_loop=True,
                 )
@@ -507,8 +845,17 @@ class _AstAnalyzer:
                     known_nonblank=set(current_nonblank),
                     safe_string_elements=set(current_safe_elements),
                     aliases=dict(current_aliases),
+                    fixed_tuple_elements=dict(current_fixed_tuple_elements),
+                    blocked_helpers=current_blocked_helpers,
+                    allow_fixed_tuple_contracts=allow_fixed_tuple_contracts,
                     scope=scope,
                     in_loop=in_loop,
+                )
+                invalidate_fixed(
+                    _mutated_names(statement.body)
+                    | _mutated_names(statement.orelse)
+                    | _potentially_mutated_names_in(statement.body)
+                    | _potentially_mutated_names_in(statement.orelse)
                 )
                 continue
             if isinstance(statement, ast.While):
@@ -516,8 +863,11 @@ class _AstAnalyzer:
                     statement.test,
                     protected=current_protected,
                     known_nonempty=current_nonempty,
+                    fixed_tuple_elements=current_fixed_tuple_elements,
+                    aliases=current_aliases,
                     scope=scope,
                 )
+                invalidate_fixed(_potentially_mutated_names(statement.test))
                 self.scan_block(
                     statement.body,
                     protected=dict(current_protected),
@@ -525,6 +875,9 @@ class _AstAnalyzer:
                     known_nonblank=set(current_nonblank),
                     safe_string_elements=set(current_safe_elements),
                     aliases=dict(current_aliases),
+                    fixed_tuple_elements=dict(current_fixed_tuple_elements),
+                    blocked_helpers=current_blocked_helpers,
+                    allow_fixed_tuple_contracts=allow_fixed_tuple_contracts,
                     scope=scope,
                     in_loop=True,
                 )
@@ -535,8 +888,17 @@ class _AstAnalyzer:
                     known_nonblank=set(current_nonblank),
                     safe_string_elements=set(current_safe_elements),
                     aliases=dict(current_aliases),
+                    fixed_tuple_elements=dict(current_fixed_tuple_elements),
+                    blocked_helpers=current_blocked_helpers,
+                    allow_fixed_tuple_contracts=allow_fixed_tuple_contracts,
                     scope=scope,
                     in_loop=in_loop,
+                )
+                invalidate_fixed(
+                    _mutated_names(statement.body)
+                    | _mutated_names(statement.orelse)
+                    | _potentially_mutated_names_in(statement.body)
+                    | _potentially_mutated_names_in(statement.orelse)
                 )
                 continue
             if isinstance(statement, (ast.Assign, ast.AnnAssign)):
@@ -566,9 +928,24 @@ class _AstAnalyzer:
                     value,
                     protected=current_protected,
                     known_nonempty=current_nonempty,
+                    fixed_tuple_elements=current_fixed_tuple_elements,
+                    aliases=current_aliases,
                     scope=scope,
                 )
                 assigned = _assigned_names(targets)
+                assigned_fixed_tuple: tuple[str, int] | None = None
+                if (
+                    allow_fixed_tuple_contracts
+                    and len(targets) == 1
+                    and isinstance(targets[0], ast.Name)
+                    and value is not None
+                ):
+                    arity = self.fixed_tuple_assignment_arity(
+                        value,
+                        blocked_helpers=current_blocked_helpers,
+                    )
+                    if arity is not None:
+                        assigned_fixed_tuple = (targets[0].id, arity)
                 assigned_alias: tuple[str, str] | None = None
                 if (
                     len(targets) == 1
@@ -601,8 +978,18 @@ class _AstAnalyzer:
                         assignment_nonempty[target_name] = "nonempty_element_provenance"
                         assignment_nonblank.add(target_name)
                 invalidate(assigned)
+                invalidate_fixed(_potentially_mutated_names(value))
+                invalidate_fixed(
+                    {
+                        target.value.id
+                        for target in targets
+                        if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
+                    }
+                )
                 if assigned_alias is not None and assigned_alias[0] != assigned_alias[1]:
                     current_aliases[assigned_alias[0]] = assigned_alias[1]
+                if assigned_fixed_tuple is not None:
+                    current_fixed_tuple_elements[assigned_fixed_tuple[0]] = assigned_fixed_tuple[1]
                 current_nonempty.update(assignment_nonempty)
                 current_nonblank.update(assignment_nonblank)
                 if (
@@ -640,6 +1027,8 @@ class _AstAnalyzer:
                     expression,
                     protected=current_protected,
                     known_nonempty=current_nonempty,
+                    fixed_tuple_elements=current_fixed_tuple_elements,
+                    aliases=current_aliases,
                     scope=scope,
                 )
             if (
@@ -668,6 +1057,8 @@ class _AstAnalyzer:
                     "__setitem__",
                 }:
                     invalidate({local_collection})
+            invalidate_fixed(_potentially_mutated_names(statement))
+            invalidate_fixed(_mutated_names([statement]))
             for nested in (
                 getattr(statement, "body", []),
                 getattr(statement, "orelse", []),
@@ -681,6 +1072,9 @@ class _AstAnalyzer:
                         known_nonblank=set(current_nonblank),
                         safe_string_elements=set(current_safe_elements),
                         aliases=dict(current_aliases),
+                        fixed_tuple_elements=dict(current_fixed_tuple_elements),
+                        blocked_helpers=current_blocked_helpers,
+                        allow_fixed_tuple_contracts=allow_fixed_tuple_contracts,
                         scope=scope,
                         in_loop=in_loop,
                     )
@@ -696,7 +1090,10 @@ class PythonNonEmptyCollectionDetector:
 
     def detect(self, context: AnalysisContext) -> list[AssumptionCandidate]:
         tree = ast.parse(context.source, filename=context.path)
-        analyzer = _AstAnalyzer(context)
+        analyzer = _AstAnalyzer(
+            context,
+            fixed_tuple_helpers=_module_fixed_tuple_helpers(tree),
+        )
         analyzer.scan_block(tree.body)
         return sorted(
             analyzer.candidates,

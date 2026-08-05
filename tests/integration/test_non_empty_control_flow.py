@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from landmine.analyzers.assumptions import analyze_assumptions
+from landmine.analyzers.defuse import analyze_defuse
 from landmine.domain import Target
 from landmine.renderers import render_json, render_markdown
 from tests.conftest import GitFixture, repository_digest
@@ -37,8 +39,12 @@ def non_empty_control_flow(git_fixture: GitFixture) -> GitFixture:
                 "    return out\n"
                 "\n"
                 "\n"
+                "def group(children) -> list[tuple[int, str]]:\n"
+                "    return [(0, child) for child in children]\n"
+                "\n"
+                "\n"
                 "def walk(alg, condition):\n"
-                "    children = alg['children']\n"
+                "    children = group(alg['children']) if condition else []\n"
                 "    return condition or (children and children[0][0])\n"
             )
         },
@@ -84,10 +90,21 @@ def test_walk_short_circuit_suppresses_only_proven_collection(
     non_empty_control_flow: GitFixture,
 ) -> None:
     result = _analyze(non_empty_control_flow, "walk")
+    payload = json.loads(render_json(result))
+    markdown = render_markdown(result)
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas" / "result-v1.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
 
-    assert _non_empty_variables(result) == ["children[0]"]
+    assert _non_empty_variables(result) == []
     assert result.assumption_analysis is not None
-    assert result.assumption_analysis.suppression_count == 1
+    assert result.assumption_analysis.suppression_count == 2
+    assert payload["assumption_analysis"]["suppression_count"] == 2
+    assert result.summary in markdown
+    jsonschema.Draft202012Validator(schema).validate(payload)
     assert any(
         finding.assumption is not None
         and finding.assumption.detector_id == "python.required-mapping-key"
@@ -102,6 +119,23 @@ def test_control_flow_output_is_deterministic(
     assert render_json(_analyze(non_empty_control_flow, "fold_lines")) == render_json(
         _analyze(non_empty_control_flow, "fold_lines")
     )
+    assert render_json(_analyze(non_empty_control_flow, "walk")) == render_json(
+        _analyze(non_empty_control_flow, "walk")
+    )
+
+
+def test_defuse_omits_fixed_tuple_empty_collection_characterization(
+    non_empty_control_flow: GitFixture,
+) -> None:
+    result = analyze_defuse(
+        repo=non_empty_control_flow.root,
+        target=Target(symbol="walk"),
+        goal="make a narrow traversal behavior change",
+        clock=lambda: FIXED_TIME,
+        monotonic=lambda: 100.0,
+    )
+
+    assert not any("empty collection" in item.description for item in result.plan.tests)
 
 
 def test_control_flow_analysis_does_not_mutate_repository(
