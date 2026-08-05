@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
-## [0.1.0-alpha.2] - 2026-08-04
+## [0.1.0-alpha.2] - 2026-08-05
 
 ### Fixed
 
