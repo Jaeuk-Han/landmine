@@ -58,6 +58,8 @@ class _ImportBinding:
     line: int
     module: str
     imported_name: str | None = None
+    scope_start: int | None = None
+    scope_end: int | None = None
 
 
 @dataclass(frozen=True)
@@ -404,6 +406,16 @@ def _reference_bindings(
     wildcard_lines: list[int] = []
     unresolved: list[str] = []
     parent, _, child = target_module.rpartition(".")
+    parents = _parent_map(tree)
+
+    def function_scope(node: ast.AST) -> tuple[int | None, int | None]:
+        current = node
+        while current in parents:
+            current = parents[current]
+            if isinstance(current, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                return current.lineno, current.end_lineno or current.lineno
+        return None, None
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -414,6 +426,20 @@ def _reference_bindings(
                             alias.asname or alias.name,
                             node.lineno,
                             target_module,
+                        )
+                    )
+                elif target_symbol is not None and target_module.startswith(f"{alias.name}."):
+                    remaining_module = target_module[len(alias.name) + 1 :]
+                    local_prefix = alias.asname or alias.name
+                    scope_start, scope_end = function_scope(node)
+                    bindings.append(
+                        _ImportBinding(
+                            "package_symbol",
+                            f"{local_prefix}.{remaining_module}",
+                            node.lineno,
+                            target_module,
+                            scope_start=scope_start,
+                            scope_end=scope_end,
                         )
                     )
         elif isinstance(node, ast.ImportFrom):
@@ -565,7 +591,11 @@ def _find_references(
                             binding_name=binding.local_name,
                         )
                     )
-            elif binding.kind in {"module", "module_symbol"} and isinstance(node, ast.Attribute):
+            elif binding.kind in {
+                "module",
+                "module_symbol",
+                "package_symbol",
+            } and isinstance(node, ast.Attribute):
                 if dotted_name(node.value) != binding.local_name:
                     continue
                 root_name = binding.local_name.split(".")[0]
@@ -578,6 +608,18 @@ def _find_references(
                     continue
                 if target_symbol is not None and node.attr != target_symbol:
                     continue
+                if binding.kind == "package_symbol":
+                    if (
+                        binding.scope_start is not None
+                        and binding.scope_end is not None
+                        and not binding.scope_start <= node.lineno <= binding.scope_end
+                    ):
+                        continue
+                    parent = parents.get(node)
+                    if not isinstance(parent, ast.Call) or parent.func is not node:
+                        continue
+                    if node.lineno <= binding.line:
+                        continue
                 references.append(
                     _reference_from_node(
                         local_name=node.attr,
@@ -937,7 +979,11 @@ def analyze_blast(
             target_module=target_module,
             target_symbol=subject.symbol,
         )
-        imports_target = bool(bindings or wildcard_lines or unresolved)
+        imports_target = bool(
+            any(binding.kind != "package_symbol" for binding in bindings)
+            or wildcard_lines
+            or unresolved
+        )
         for line in wildcard_lines:
             limitations.append(
                 Limitation(
@@ -963,7 +1009,7 @@ def analyze_blast(
         bindings = tuple(
             binding
             for binding in bindings
-            if binding.kind != "module_symbol"
+            if binding.kind not in {"module_symbol", "package_symbol"}
             or (binding.line, binding.local_name) in proven_module_symbol_bindings
         )
         if not bindings:
