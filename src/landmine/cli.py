@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
+import time
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from landmine import __version__
@@ -12,6 +15,14 @@ from landmine.analyzers.assumptions import analyze_assumptions
 from landmine.analyzers.blast import analyze_blast
 from landmine.analyzers.defuse import analyze_defuse
 from landmine.analyzers.why import analyze_why
+from landmine.domain import (
+    AnalysisStatus,
+    Limitation,
+    Metrics,
+    Result,
+    Risk,
+    ScoreComponent,
+)
 from landmine.git import GitError, GitTimeout
 from landmine.renderers import render_json, render_markdown
 from landmine.source import TargetError, parse_target
@@ -114,9 +125,55 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _timeout_result(args: argparse.Namespace, *, started: float) -> Result:
+    identity_fields = (
+        args.command,
+        f"{args.timeout:g}",
+        str(getattr(args, "target", None)),
+        str(getattr(args, "change", None)),
+        str(getattr(args, "goal", None)),
+    )
+    material = "\0".join(identity_fields)
+    limitation = Limitation(
+        code="budget_exhausted",
+        message="The configured analysis budget was exhausted before analysis completed.",
+    )
+    return Result(
+        schema_version="landmine.result.v1",
+        analysis_id=f"lm_{hashlib.sha256(material.encode()).hexdigest()[:12]}",
+        analysis_status=AnalysisStatus.PARTIAL,
+        command=args.command,
+        generated_at=datetime.now(UTC).isoformat(),
+        repository=None,
+        request={"timeout": args.timeout},
+        summary="No analysis was completed before the configured budget was exhausted.",
+        risk=Risk(
+            score=0,
+            grade="low",
+            components={
+                "uncertainty": ScoreComponent(
+                    value=0,
+                    weight=0.0,
+                    signals=("not_evaluated",),
+                )
+            },
+        ),
+        findings=(),
+        evidence=(),
+        limitations=(limitation,),
+        metrics=Metrics(
+            elapsed_ms=max(0, round((time.monotonic() - started) * 1000)),
+            files_scanned=0,
+            commits_scanned=0,
+            evidence_count=0,
+        ),
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    started = time.monotonic()
     try:
         target = parse_target(args.target) if args.target is not None else None
         if args.command == "defuse":
@@ -161,9 +218,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(str(exc))
     except ValueError as exc:
         parser.error(str(exc))
-    except GitTimeout as exc:
-        print(f"landmine: {exc}", file=sys.stderr)
-        return 1
+    except GitTimeout:
+        result = _timeout_result(args, started=started)
     except GitError as exc:
         print(f"landmine: {exc}", file=sys.stderr)
         return 3

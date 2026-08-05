@@ -7,7 +7,7 @@ import json
 from enum import Enum
 from typing import Any
 
-from landmine.domain import BlastImpact, PlanItem, Result
+from landmine.domain import AnalysisStatus, BlastImpact, PlanItem, RepositoryState, Result
 
 
 def _primitive(value: Any) -> Any:
@@ -93,6 +93,20 @@ def render_json(result: Result) -> str:
 
 def render_markdown(result: Result) -> str:
     """Render the v1 section order without discovering or changing evidence."""
+    if (
+        result.analysis_status is AnalysisStatus.PARTIAL
+        and result.repository is None
+        and result.error is None
+        and not result.findings
+        and not result.evidence
+        and not result.evolution
+        and result.assumption_analysis is None
+        and result.blast_analysis is None
+        and not result.impacts
+        and result.defuse_analysis is None
+        and tuple(item.code for item in result.limitations) == ("budget_exhausted",)
+    ):
+        return _render_budget_exhausted_markdown(result)
     if result.error is not None:
         lines = [
             f"# Landmine: {result.command}",
@@ -316,14 +330,46 @@ def render_markdown(result: Result) -> str:
             "## Analysis metadata",
             "",
             f"- Status: {result.analysis_status.value}",
-            f"- HEAD: `{result.repository.head}`",
-            f"- Dirty worktree: {str(result.repository.dirty).lower()}",
-            f"- Shallow repository: {str(result.repository.shallow).lower()}",
+            *_repository_metadata(result.repository),
             f"- Evidence count: {result.metrics.evidence_count}",
             "",
         ]
     )
     return "\n".join(lines)
+
+
+def _render_budget_exhausted_markdown(result: Result) -> str:
+    limitation = result.limitations[0]
+    return "\n".join(
+        [
+            f"# Landmine: {result.command}",
+            "",
+            "## Summary",
+            "",
+            result.summary,
+            "",
+            "## Limitations",
+            "",
+            f"- `{limitation.code}`: {limitation.message}",
+            "",
+            "## Analysis metadata",
+            "",
+            f"- Status: {result.analysis_status.value}",
+            "- Repository state: not established before budget exhaustion",
+            f"- Evidence count: {result.metrics.evidence_count}",
+            "",
+        ]
+    )
+
+
+def _repository_metadata(repository: RepositoryState | None) -> list[str]:
+    if repository is None:
+        return ["- Repository state: not established"]
+    return [
+        f"- HEAD: `{repository.head}`",
+        f"- Dirty worktree: {str(repository.dirty).lower()}",
+        f"- Shallow repository: {str(repository.shallow).lower()}",
+    ]
 
 
 def _render_blast_markdown(result: Result) -> str:
@@ -405,9 +451,7 @@ def _render_blast_markdown(result: Result) -> str:
             f"- Status: {result.analysis_status.value}",
             f"- Scope: {analysis.scope}",
             f"- Supported depth: {analysis.supported_depth}",
-            f"- HEAD: `{result.repository.head}`",
-            f"- Dirty worktree: {str(result.repository.dirty).lower()}",
-            f"- Shallow repository: {str(result.repository.shallow).lower()}",
+            *_repository_metadata(result.repository),
             f"- Files scanned: {result.metrics.files_scanned}",
             f"- Evidence count: {result.metrics.evidence_count}",
             "",

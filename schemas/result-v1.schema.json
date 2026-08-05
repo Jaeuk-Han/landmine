@@ -26,7 +26,12 @@
     "analysis_status": {"enum": ["complete", "partial", "failed"]},
     "command": {"enum": ["why", "assumptions", "blast", "defuse"]},
     "generated_at": {"type": "string", "format": "date-time"},
-    "repository": {"$ref": "#/$defs/repository"},
+    "repository": {
+      "oneOf": [
+        {"$ref": "#/$defs/repository"},
+        {"type": "null"}
+      ]
+    },
     "request": {"type": "object"},
     "summary": {"type": "string"},
     "risk": {"$ref": "#/$defs/risk"},

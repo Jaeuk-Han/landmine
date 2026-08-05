@@ -291,7 +291,7 @@ class Result:
     analysis_status: AnalysisStatus
     command: str
     generated_at: str
-    repository: RepositoryState
+    repository: RepositoryState | None
     request: dict[str, Any]
     summary: str
     risk: Risk
